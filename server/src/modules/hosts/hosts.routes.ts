@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { HostsController } from './hosts.controller.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
-import { createHostSchema, updateHostSchema, hostActionSchema } from './hosts.schema.js';
+import { createHostSchema, updateHostSchema, hostActionSchema, hostLogsQuerySchema } from './hosts.schema.js';
 
 export const hostsRouter = Router();
 
@@ -31,4 +31,7 @@ hostsRouter.post('/:id/actions', validate({ body: hostActionSchema }), HostsCont
 hostsRouter.get('/:id/stats', HostsController.getStats);
 
 // GET /api/v1/hosts/:id/logs - Get container live logs
-hostsRouter.get('/:id/logs', HostsController.getLogs);
+hostsRouter.get('/:id/logs', validate({ query: hostLogsQuerySchema }), HostsController.getLogs);
+
+// GET /api/v1/hosts/:id/logs/stream - Server-Sent Events (SSE) live logs stream
+hostsRouter.get('/:id/logs/stream', HostsController.streamLogs);

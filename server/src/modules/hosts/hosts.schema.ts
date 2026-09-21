@@ -61,6 +61,8 @@ export const hostActionSchema = z.object({
 export const hostLogsQuerySchema = z.object({
   tail: z.coerce.number().int().min(1).max(1000).optional().default(100),
   since: z.coerce.number().int().positive().optional(),
+  level: z.enum(['all', 'info', 'warn', 'error', 'debug']).optional().default('all'),
+  search: z.string().trim().max(100).optional(),
 });
 
 export type CreateHostInput = z.infer<typeof createHostSchema>;

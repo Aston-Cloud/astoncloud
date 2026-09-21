@@ -179,11 +179,13 @@ export class ProductionNodeAgentClient implements INodeAgentClient {
   public async getContainerLogs(
     node: NodeContext,
     containerId: string,
-    options?: { tail?: number; since?: number }
+    options?: { tail?: number; since?: number; level?: string; search?: string }
   ): Promise<ContainerLogsResult> {
     const params = new URLSearchParams();
     if (options?.tail) params.set('tail', String(options.tail));
     if (options?.since) params.set('since', String(options.since));
+    if (options?.level && options.level !== 'all') params.set('level', options.level);
+    if (options?.search) params.set('search', options.search);
 
     const query = params.toString() ? `?${params.toString()}` : '';
     return this.request<ContainerLogsResult>(node, `/containers/${containerId}/logs${query}`, {

@@ -634,25 +634,168 @@ export class HostsService {
   }
 
   /**
-   * Fetch live logs from Node Agent
+   * Fetch live logs from Node Agent or lifecycle history
    */
   public static async getHostLogs(
     hostId: string,
     userId: string,
     role: string,
-    queryOptions?: HostLogsQuery
+    queryOptions?: Partial<HostLogsQuery>
   ) {
     const host = await this.getHostById(hostId, userId, role);
-    if (!host.nodeId || !host.containerId) {
+
+    // If host is PROVISIONING
+    if (host.status === 'PROVISIONING') {
+      const createdTs = host.createdAt ? new Date(host.createdAt).toISOString() : new Date().toISOString();
+      const entries: Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'debug'; message: string }> = [
+        {
+          timestamp: createdTs,
+          level: 'info',
+          message: `Tiếp nhận yêu cầu cấp phát máy chủ: ${host.name} (${host.runtime} ${host.runtimeVersion})`,
+        },
+        {
+          timestamp: new Date(new Date(createdTs).getTime() + 100).toISOString(),
+          level: 'info',
+          message: `Lập lịch điều phối tài nguyên trên node ${host.node?.name || 'hạ tầng'} (${host.node?.region || host.region || 'Singapore'})`,
+        },
+        {
+          timestamp: new Date(new Date(createdTs).getTime() + 200).toISOString(),
+          level: 'info',
+          message: `Đang kết nối tới Node Agent để khởi tạo môi trường container cô lập...`,
+        },
+      ];
       return {
         id: host.id,
-        lines: ['[Aston Cloud] Máy chủ chưa có container đang chạy hoặc chưa được cấp phát.'],
-        total: 1,
+        ...this.filterAndFormatLogEntries(entries, queryOptions),
       };
     }
 
-    const nodeContext = await this.getNodeContext(host.nodeId);
-    const agentClient = getNodeAgentClient();
-    return agentClient.getContainerLogs(nodeContext, host.containerId, queryOptions);
+    // If host is in ERROR state
+    if (host.status === 'ERROR') {
+      const createdTs = host.createdAt ? new Date(host.createdAt).toISOString() : new Date().toISOString();
+      const updatedTs = host.updatedAt ? new Date(host.updatedAt).toISOString() : new Date().toISOString();
+      const entries: Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'debug'; message: string }> = [
+        {
+          timestamp: createdTs,
+          level: 'info',
+          message: `Tiếp nhận yêu cầu cấp phát máy chủ: ${host.name} (${host.runtime} ${host.runtimeVersion})`,
+        },
+        {
+          timestamp: updatedTs,
+          level: 'error',
+          message: `Cấp phát thất bại: ${host.errorReason || 'Lỗi không xác định khi khởi tạo hạ tầng'}`,
+        },
+        {
+          timestamp: new Date(new Date(updatedTs).getTime() + 50).toISOString(),
+          level: 'info',
+          message: `Tài nguyên hệ thống đã được hoàn trả về node an toàn`,
+        },
+      ];
+      return {
+        id: host.id,
+        ...this.filterAndFormatLogEntries(entries, queryOptions),
+      };
+    }
+
+    // If host is DELETING
+    if (host.status === 'DELETING') {
+      const now = new Date().toISOString();
+      const entries: Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'debug'; message: string }> = [
+        {
+          timestamp: now,
+          level: 'warn',
+          message: `Máy chủ đang trong quá trình xóa dọn dẹp hạ tầng container và giải phóng tài nguyên.`,
+        },
+      ];
+      return {
+        id: host.id,
+        ...this.filterAndFormatLogEntries(entries, queryOptions),
+      };
+    }
+
+    // If host has containerId and nodeId
+    if (host.nodeId && host.containerId) {
+      const nodeContext = await this.getNodeContext(host.nodeId);
+      const agentClient = getNodeAgentClient();
+      const rawResult = await agentClient.getContainerLogs(nodeContext, host.containerId, queryOptions);
+
+      // Redact sensitive patterns in logs
+      const sanitizedLines = rawResult.lines.map((l) => this.redactSensitiveData(l));
+      const sanitizedEntries = rawResult.entries?.map((e) => ({
+        ...e,
+        message: this.redactSensitiveData(e.message),
+      }));
+
+      return {
+        id: host.id,
+        lines: sanitizedLines,
+        total: rawResult.total,
+        entries: sanitizedEntries,
+      };
+    }
+
+    // Fallback if STOPPED or PENDING without active containerId
+    const now = new Date().toISOString();
+    const statusMsg =
+      host.status === 'STOPPED'
+        ? 'Container hiện đang ở trạng thái DỪNG (STOPPED). Không có tiến trình ứng dụng đang chạy.'
+        : `Máy chủ đang ở trạng thái ${host.status}. Chưa có container hoạt động.`;
+
+    const entries: Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'debug'; message: string }> = [
+      {
+        timestamp: now,
+        level: host.status === 'STOPPED' ? 'warn' : 'info',
+        message: statusMsg,
+      },
+    ];
+
+    return {
+      id: host.id,
+      ...this.filterAndFormatLogEntries(entries, queryOptions),
+    };
+  }
+
+  private static filterAndFormatLogEntries(
+    entries: Array<{ timestamp: string; level: 'info' | 'warn' | 'error' | 'debug'; message: string }>,
+    options?: Partial<HostLogsQuery>
+  ) {
+    let filtered = [...entries];
+
+    if (options?.since) {
+      filtered = filtered.filter((e) => new Date(e.timestamp).getTime() >= options.since!);
+    }
+
+    if (options?.level && options.level !== 'all') {
+      const lvl = options.level.toLowerCase();
+      filtered = filtered.filter((e) => e.level.toLowerCase() === lvl);
+    }
+
+    if (options?.search) {
+      const q = options.search.toLowerCase();
+      filtered = filtered.filter(
+        (e) => e.message.toLowerCase().includes(q) || e.level.toLowerCase().includes(q)
+      );
+    }
+
+    const tail = options?.tail ? Math.max(1, options.tail) : 100;
+    const sliced = filtered.slice(-tail);
+    const lines = sliced.map(
+      (e) => `[${e.timestamp}] [${e.level.toUpperCase()}] ${this.redactSensitiveData(e.message)}`
+    );
+
+    return {
+      lines,
+      total: filtered.length,
+      entries: sliced.map((e) => ({ ...e, message: this.redactSensitiveData(e.message) })),
+    };
+  }
+
+  private static redactSensitiveData(text: string): string {
+    return text
+      .replace(/password\s*=\s*['"][^'"]+['"]/gi, 'password="[REDACTED]"')
+      .replace(/secret\s*=\s*['"][^'"]+['"]/gi, 'secret="[REDACTED]"')
+      .replace(/token\s*=\s*['"][^'"]+['"]/gi, 'token="[REDACTED]"')
+      .replace(/api[_-]?key\s*=\s*['"][^'"]+['"]/gi, 'apiKey="[REDACTED]"')
+      .replace(/bearer\s+[a-zA-Z0-9_\-\.]+/gi, 'Bearer [REDACTED]');
   }
 }

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { FileText, Search, Trash2, Download, Filter, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { FileText, Search, Trash2, Download, RefreshCw } from 'lucide-react';
 import { Host, LogEntry } from '../../types';
 import { useAppState } from '../../context/AppStateContext';
 import { Card } from '../../components/ui/Card';
@@ -13,23 +13,82 @@ interface HostLogsTabProps {
 }
 
 export const HostLogsTab: React.FC<HostLogsTabProps> = ({ host }) => {
-  const { logs, clearLogs } = useAppState();
+  const { logs } = useAppState();
   const { showToast } = useToast();
-
-  const hostLogs: LogEntry[] = logs[host.id] || [];
 
   const [search, setSearch] = useState('');
   const [levelFilter, setLevelFilter] = useState<'all' | 'info' | 'warn' | 'error' | 'debug'>('all');
+  const [apiLogs, setApiLogs] = useState<LogEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isCleared, setIsCleared] = useState(false);
 
-  const filteredLogs = hostLogs.filter((l) => {
+  const targetHostId = (host as any).numericId || host.id.replace('host-', '');
+
+  const fetchLogs = useCallback(async () => {
+    const token = localStorage.getItem('aston_auth_token');
+    setIsLoading(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const res = await fetch(`/api/v1/hosts/${targetHostId}/logs?tail=200`, { headers });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data?.logs) {
+          const logData = json.data.logs;
+          let mapped: LogEntry[] = [];
+          if (Array.isArray(logData.entries)) {
+            mapped = logData.entries.map((e: any, idx: number) => ({
+              id: `${e.timestamp}-${idx}`,
+              timestamp: e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '',
+              level: e.level || 'info',
+              source: 'container',
+              message: e.message,
+            }));
+          } else if (Array.isArray(logData.lines)) {
+            mapped = logData.lines.map((l: string, idx: number) => ({
+              id: `log-${idx}`,
+              timestamp: new Date().toLocaleTimeString(),
+              level: l.toLowerCase().includes('error') ? 'error' : l.toLowerCase().includes('warn') ? 'warn' : 'info',
+              source: 'container',
+              message: l,
+            }));
+          }
+          setApiLogs(mapped);
+          setIsCleared(false);
+          return;
+        }
+      }
+    } catch {
+      // Fall back to context logs
+    } finally {
+      setIsLoading(false);
+    }
+  }, [targetHostId]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
+
+  const effectiveLogs: LogEntry[] = isCleared
+    ? []
+    : apiLogs.length > 0
+    ? apiLogs
+    : logs[host.id] || [];
+
+  const filteredLogs = effectiveLogs.filter((l) => {
     const matchesSearch = l.message.toLowerCase().includes(search.toLowerCase()) || l.source.includes(search);
     const matchesLevel = levelFilter === 'all' || l.level === levelFilter;
     return matchesSearch && matchesLevel;
   });
 
   const handleExport = () => {
-    const text = hostLogs.map((l) => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n');
-    const blob = new Blob([text], { type: 'text/plain' });
+    const text = effectiveLogs.map((l) => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -106,10 +165,19 @@ export const HostLogsTab: React.FC<HostLogsTabProps> = ({ host }) => {
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '8px' }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={fetchLogs}
+              icon={<RefreshCw size={14} className={isLoading ? 'spin-icon' : ''} />}
+              disabled={isLoading}
+            >
+              Làm mới
+            </Button>
             <Button variant="secondary" size="sm" onClick={handleExport} icon={<Download size={14} />}>
               Xuất tệp
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => clearLogs(host.id)} icon={<Trash2 size={14} />}>
+            <Button variant="secondary" size="sm" onClick={() => setIsCleared(true)} icon={<Trash2 size={14} />}>
               Xóa sạch
             </Button>
           </div>

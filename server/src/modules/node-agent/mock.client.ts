@@ -8,6 +8,7 @@ import {
   ContainerDeleteResult,
   ContainerStatsResult,
   ContainerLogsResult,
+  LogEntryItem,
 } from './node-agent.interface.js';
 import { AppError, NotFoundError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
@@ -31,6 +32,7 @@ interface MockContainerState {
   createdAt: Date;
   startedAt?: Date;
   stoppedAt?: Date;
+  logs: LogEntryItem[];
 }
 
 export class LocalMockNodeAgentClient implements INodeAgentClient {
@@ -60,6 +62,20 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
       default:
         return `${runtime}:${version}`;
     }
+  }
+
+  private appendLog(
+    record: MockContainerState,
+    level: 'info' | 'warn' | 'error' | 'debug',
+    message: string,
+    timestamp?: string
+  ): void {
+    const ts = timestamp || new Date().toISOString();
+    record.logs.push({
+      timestamp: ts,
+      level,
+      message,
+    });
   }
 
   public async createContainer(
@@ -97,7 +113,29 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
       },
       env: options.env || {},
       createdAt: new Date(),
+      logs: [],
     };
+
+    const now = record.createdAt;
+    this.appendLog(record, 'info', `Container created (${name}, image: ${image})`, now.toISOString());
+    this.appendLog(
+      record,
+      'info',
+      `Working directory /app mounted securely from /var/lib/cloud-hosting/${options.hostId}/app`,
+      new Date(now.getTime() + 10).toISOString()
+    );
+    this.appendLog(
+      record,
+      'info',
+      `Resource quotas enforced: ${record.resources.cpuLimit} vCPU, ${record.resources.memoryLimitMb} MB RAM, ${record.resources.pidsLimit} PIDs`,
+      new Date(now.getTime() + 20).toISOString()
+    );
+    this.appendLog(
+      record,
+      'info',
+      `Network port ${options.port} allocated for host ingress`,
+      new Date(now.getTime() + 30).toISOString()
+    );
 
     this.containers.set(containerId, record);
     // Also index by hostId for easy lookup
@@ -141,6 +179,18 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
     record.status = 'running';
     record.startedAt = new Date();
 
+    const now = record.startedAt;
+    this.appendLog(record, 'info', 'Container starting', now.toISOString());
+    this.appendLog(
+      record,
+      'info',
+      `Runtime initialized (${record.runtime} ${record.version})`,
+      new Date(now.getTime() + 50).toISOString()
+    );
+    this.appendLog(record, 'info', 'Application starting', new Date(now.getTime() + 100).toISOString());
+    this.appendLog(record, 'info', `Listening on port ${record.port}`, new Date(now.getTime() + 150).toISOString());
+    this.appendLog(record, 'info', 'Application ready', new Date(now.getTime() + 200).toISOString());
+
     return {
       id: record.id,
       status: 'running',
@@ -164,6 +214,12 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
 
     record.status = 'exited';
     record.stoppedAt = new Date();
+
+    const now = record.stoppedAt;
+    this.appendLog(record, 'warn', 'SIGTERM signal received, graceful shutdown initiated', now.toISOString());
+    this.appendLog(record, 'info', 'Application stopping', new Date(now.getTime() + 50).toISOString());
+    this.appendLog(record, 'info', 'HTTP listeners closed', new Date(now.getTime() + 100).toISOString());
+    this.appendLog(record, 'info', 'Container stopped', new Date(now.getTime() + 150).toISOString());
 
     return {
       id: record.id,
@@ -189,6 +245,20 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
     record.status = 'running';
     record.startedAt = new Date();
 
+    const now = record.startedAt;
+    this.appendLog(record, 'info', 'Container restarting', now.toISOString());
+    this.appendLog(record, 'info', 'Application stopping', new Date(now.getTime() + 50).toISOString());
+    this.appendLog(record, 'info', 'Application stopped', new Date(now.getTime() + 100).toISOString());
+    this.appendLog(
+      record,
+      'info',
+      `Runtime initialized (${record.runtime} ${record.version})`,
+      new Date(now.getTime() + 150).toISOString()
+    );
+    this.appendLog(record, 'info', 'Application starting', new Date(now.getTime() + 200).toISOString());
+    this.appendLog(record, 'info', `Listening on port ${record.port}`, new Date(now.getTime() + 250).toISOString());
+    this.appendLog(record, 'info', 'Application started', new Date(now.getTime() + 300).toISOString());
+
     return {
       id: record.id,
       status: 'running',
@@ -207,6 +277,7 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
 
     const record = this.containers.get(containerIdOrHostId);
     if (record) {
+      this.appendLog(record, 'info', 'Container removed');
       this.containers.delete(record.id);
       this.containers.delete(record.hostId);
     }
@@ -264,29 +335,44 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
   public async getContainerLogs(
     _node: NodeContext,
     containerIdOrHostId: string,
-    options?: { tail?: number; since?: number }
+    options?: { tail?: number; since?: number; level?: string; search?: string }
   ): Promise<ContainerLogsResult> {
     const record = this.containers.get(containerIdOrHostId);
     if (!record) {
       throw new NotFoundError(`Container "${containerIdOrHostId}" không tồn tại trên mock node`);
     }
 
-    const tail = options?.tail || 50;
-    const sampleLogs = [
-      `[Aston Cloud] Initializing container runtime (${record.image})...`,
-      `[Aston Cloud] Working directory /app mounted securely from /var/lib/cloud-hosting/${record.hostId}/app`,
-      `[Aston Cloud] Resource quotas enforced: ${record.resources.cpuLimit} vCPU, ${record.resources.memoryLimitMb} MB RAM, ${record.resources.pidsLimit} PIDs`,
-      `[Aston Cloud] Port ${record.port} successfully bound to internal application`,
-      `[${new Date().toISOString()}] Server listening at http://0.0.0.0:${record.port}`,
-      `[${new Date().toISOString()}] Health check endpoint /health responding with HTTP 200`,
-      `[${new Date().toISOString()}] Host application is fully operational and ready for requests`,
-    ];
+    let filtered = [...record.logs];
 
-    const lines = sampleLogs.slice(-tail);
+    if (options?.since) {
+      const sinceTime = options.since;
+      filtered = filtered.filter((l) => new Date(l.timestamp).getTime() >= sinceTime);
+    }
+
+    if (options?.level && options.level.toLowerCase() !== 'all') {
+      const lvl = options.level.toLowerCase();
+      filtered = filtered.filter((l) => l.level.toLowerCase() === lvl);
+    }
+
+    if (options?.search) {
+      const query = options.search.toLowerCase();
+      filtered = filtered.filter(
+        (l) => l.message.toLowerCase().includes(query) || l.level.toLowerCase().includes(query)
+      );
+    }
+
+    const tail = options?.tail ? Math.max(1, options.tail) : 100;
+    const sliced = filtered.slice(-tail);
+
+    const lines = sliced.map(
+      (entry) => `[${entry.timestamp}] [${entry.level.toUpperCase()}] ${entry.message}`
+    );
+
     return {
       id: record.id,
       lines,
-      total: lines.length,
+      total: filtered.length,
+      entries: sliced,
     };
   }
 }

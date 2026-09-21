@@ -56,10 +56,17 @@ export interface ContainerStatsResult {
   timestamp: string;
 }
 
+export interface LogEntryItem {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  message: string;
+}
+
 export interface ContainerLogsResult {
   id: string;
   lines: string[];
   total: number;
+  entries?: LogEntryItem[];
 }
 
 export interface INodeAgentClient {
@@ -70,5 +77,9 @@ export interface INodeAgentClient {
   deleteContainer(node: NodeContext, containerId: string, force?: boolean): Promise<ContainerDeleteResult>;
   getContainerStatus(node: NodeContext, containerId: string): Promise<ContainerResult | null>;
   getContainerStats(node: NodeContext, containerId: string): Promise<ContainerStatsResult>;
-  getContainerLogs(node: NodeContext, containerId: string, options?: { tail?: number; since?: number }): Promise<ContainerLogsResult>;
+  getContainerLogs(
+    node: NodeContext,
+    containerId: string,
+    options?: { tail?: number; since?: number; level?: string; search?: string }
+  ): Promise<ContainerLogsResult>;
 }

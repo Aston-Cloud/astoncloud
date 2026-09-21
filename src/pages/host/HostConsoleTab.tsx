@@ -1,5 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Terminal, Trash2, ArrowDownCircle, CornerDownLeft, Wifi, CheckCircle2, ShieldCheck } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  Trash2,
+  ArrowDownCircle,
+  CornerDownLeft,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  AlertCircle,
+  CheckCircle2,
+  Download,
+} from 'lucide-react';
 import { Host } from '../../types';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -13,30 +23,151 @@ interface ConsoleLine {
   type: 'stdout' | 'stderr' | 'system' | 'command';
   text: string;
   time: string;
+  level?: 'info' | 'warn' | 'error' | 'debug';
 }
 
 export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
   const [command, setCommand] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
-  const [latency] = useState('14ms');
+  const [search, setSearch] = useState('');
+  const [levelFilter, setLevelFilter] = useState<'all' | 'info' | 'warn' | 'error' | 'debug'>('all');
+  const [lines, setLines] = useState<ConsoleLine[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const isClearedRef = useRef(false);
 
-  const initialOutput: ConsoleLine[] = [
-    { id: '1', type: 'system', text: `[Aston Cloud] Khởi tạo môi trường container cho máy chủ: ${host.name}`, time: '16:00:00' },
-    { id: '2', type: 'system', text: `[Aston Cloud] Đang kết nối tới container cô lập tại ${host.ipAddress}:${host.port}`, time: '16:00:01' },
-    { id: '3', type: 'stdout', text: `Mã Container: c-${host.id} [Môi trường: ${host.version}]`, time: '16:00:01' },
-    { id: '4', type: 'stdout', text: `Cấu hình môi trường: NODE_ENV=production, PORT=${host.port}`, time: '16:00:02' },
-    { id: '5', type: 'stdout', text: `Tiến trình daemon ứng dụng đã chạy với PID 1842. Đang lắng nghe trên 0.0.0.0:${host.port}`, time: '16:00:02' },
-    { id: '6', type: 'stdout', text: `[Sẵn sàng] Container đã sẵn sàng tiếp nhận các yêu cầu truy cập.`, time: '16:00:03' },
-  ];
+  const targetHostId = (host as any).numericId || host.id.replace('host-', '');
 
-  const [lines, setLines] = useState<ConsoleLine[]>(initialOutput);
+  const formatRawLine = (raw: string, idx: number): ConsoleLine => {
+    // Attempt parsing standard format: [ISO] [LEVEL] Message
+    const match = raw.match(/^\[(.*?)\]\s+\[(INFO|WARN|ERROR|DEBUG)\]\s+(.*)$/i);
+    if (match) {
+      const [, ts, lvl, msg] = match;
+      const lowerLvl = lvl.toLowerCase() as 'info' | 'warn' | 'error' | 'debug';
+      const timeStr = ts.includes('T') ? new Date(ts).toLocaleTimeString() : ts;
+      return {
+        id: `raw-${idx}-${Date.now()}`,
+        type: lowerLvl === 'error' ? 'stderr' : lowerLvl === 'warn' ? 'system' : 'stdout',
+        text: msg,
+        time: timeStr,
+        level: lowerLvl,
+      };
+    }
 
+    return {
+      id: `raw-${idx}-${Date.now()}`,
+      type: raw.toLowerCase().includes('error') ? 'stderr' : raw.toLowerCase().includes('warn') ? 'system' : 'stdout',
+      text: raw,
+      time: new Date().toLocaleTimeString(),
+      level: raw.toLowerCase().includes('error') ? 'error' : raw.toLowerCase().includes('warn') ? 'warn' : 'info',
+    };
+  };
+
+  const fetchLogs = useCallback(async (isManualRefresh = false) => {
+    const token = localStorage.getItem('aston_auth_token');
+    if (isManualRefresh) {
+      setIsLoading(true);
+      isClearedRef.current = false;
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const res = await fetch(`/api/v1/hosts/${targetHostId}/logs?tail=150`, { headers });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setConnectionStatus('unauthorized');
+        } else {
+          setConnectionStatus('error');
+        }
+        return;
+      }
+
+      const json = await res.json();
+      if (json.success && json.data?.logs) {
+        if (isClearedRef.current) {
+          // If user clicked clear locally and this is a background poll, keep view cleared
+          return;
+        }
+
+        const logData = json.data.logs;
+        let newLines: ConsoleLine[] = [];
+
+        if (Array.isArray(logData.entries) && logData.entries.length > 0) {
+          newLines = logData.entries.map((e: any, idx: number) => {
+            const timeStr = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '';
+            return {
+              id: `${e.timestamp}-${idx}`,
+              type: e.level === 'error' ? 'stderr' : e.level === 'warn' ? 'system' : 'stdout',
+              text: e.message,
+              time: timeStr,
+              level: e.level,
+            };
+          });
+        } else if (Array.isArray(logData.lines)) {
+          newLines = logData.lines.map((l: string, idx: number) => formatRawLine(l, idx));
+        }
+
+        setLines(newLines);
+        setConnectionStatus(host.status === 'RUNNING' ? 'connected' : host.status.toLowerCase());
+      }
+    } catch {
+      setConnectionStatus('disconnected');
+    } finally {
+      if (isManualRefresh) {
+        setIsLoading(false);
+      }
+    }
+  }, [targetHostId, host.status]);
+
+  // Initial fetch and polling loop
+  useEffect(() => {
+    isClearedRef.current = false;
+    fetchLogs(true);
+
+    // Live update polling for RUNNING or PROVISIONING host
+    let interval: any;
+    if (host.status === 'RUNNING' || host.status === 'PROVISIONING') {
+      interval = setInterval(() => {
+        fetchLogs(false);
+      }, 2500);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [fetchLogs, host.status]);
+
+  // Auto-scroll handler
   useEffect(() => {
     if (autoScroll && terminalEndRef.current) {
       terminalEndRef.current.scrollTop = terminalEndRef.current.scrollHeight;
     }
-  }, [lines, autoScroll]);
+  }, [lines, autoScroll, search, levelFilter]);
+
+  const handleClearView = () => {
+    isClearedRef.current = true;
+    setLines([]);
+  };
+
+  const handleExportLogs = () => {
+    const text = lines
+      .map((l) => `[${l.time}] [${(l.level || 'INFO').toUpperCase()}] ${l.text}`)
+      .join('\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${host.name}-console-${Date.now()}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handleRunCommand = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,73 +180,73 @@ export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
       { id: `${Date.now()}-cmd`, type: 'command', text: `$ ${cmd}`, time },
     ];
 
-    // Simulated responses
     const lower = cmd.toLowerCase();
     if (lower === 'clear') {
-      setLines([]);
+      handleClearView();
       setCommand('');
       return;
+    } else if (lower === 'refresh') {
+      fetchLogs(true);
+      newLines.push({
+        id: `${Date.now()}-out`,
+        type: 'system',
+        text: `[Aston Cloud] Đã làm mới nhật ký máy chủ từ cơ sở hạ tầng.`,
+        time,
+      });
     } else if (lower === 'help') {
       newLines.push({
         id: `${Date.now()}-out`,
         type: 'stdout',
-        text: `Trợ giúp Cửa sổ Dòng lệnh Aston Cloud:\n  status     - Xem tình trạng và thông số tài nguyên container\n  pm2 list   - Xem danh sách tiến trình worker\n  version    - In phiên bản runtime và nhân hệ điều hành\n  uptime     - Hiển thị thời gian chạy của máy chủ\n  ls -la     - Liệt kê các tệp tin trong thư mục gốc\n  clear      - Xóa sạch màn hình dòng lệnh\n  restart    - Kích hoạt khởi động lại container an toàn`,
+        text: `Trợ giúp Bảng điều khiển Aston Cloud (Chế độ An toàn):\n  status   - Xem thông số cấu hình và tình trạng hạ tầng của máy chủ\n  uptime   - Xem thời gian máy chủ đã hoạt động\n  version  - In phiên bản runtime và môi trường thực thi\n  refresh  - Tải lại nhật ký trực tiếp từ Node Agent\n  clear    - Xóa màn hình dòng lệnh hiện tại`,
         time,
       });
-    } else if (lower === 'status' || lower === 'top') {
+    } else if (lower === 'status' || lower === 'info') {
       newLines.push({
         id: `${Date.now()}-out`,
         type: 'stdout',
-        text: `Tình trạng Container:\n  Máy chủ: ${host.name}\n  Trạng thái: ${host.status.toUpperCase()}\n  CPU: ${host.cpuUsage}% / 100%\n  Bộ nhớ: ${host.ramUsage}MB / ${host.ramTotal}MB\n  Ổ cứng: ${host.diskUsage}GB / ${host.diskTotal}GB\n  Thời gian chạy: ${host.uptime}`,
-        time,
-      });
-    } else if (lower === 'pm2 list' || lower === 'ps') {
-      newLines.push({
-        id: `${Date.now()}-out`,
-        type: 'stdout',
-        text: `┌────┬──────────────────────┬─────────────┬─────────┬─────────┬──────────┐\n│ id │ name                 │ mode        │ ↺       │ status  │ cpu      │\n├────┼──────────────────────┼─────────────┼─────────┼─────────┼──────────┤\n│ 0  │ ${host.name.padEnd(20)} │ cluster     │ 0       │ online  │ ${host.cpuUsage}%      │\n└────┴──────────────────────┴─────────────┴─────────┴─────────┴──────────┘`,
-        time,
-      });
-    } else if (lower.includes('node -v') || lower.includes('bun -v') || lower.includes('python -v') || lower === 'version') {
-      newLines.push({
-        id: `${Date.now()}-out`,
-        type: 'stdout',
-        text: `${host.version} (Aston Linux Edge Kernel 6.6.14-aston-x86_64)`,
+        text: `Thông số Máy chủ Aston Cloud:\n  Tên máy chủ: ${host.name}\n  Trạng thái: ${host.status}\n  Runtime: ${host.runtime} (Phiên bản: ${host.version})\n  Địa chỉ IP & Cổng: ${host.ipAddress}:${host.port}\n  Giới hạn CPU: ${host.cpuLimit ? host.cpuLimit + ' vCPU' : '1 vCPU'}\n  Giới hạn RAM: ${host.ramTotal} MB\n  Giới hạn Ổ cứng: ${host.diskTotal} GB\n  Thời gian hoạt động: ${host.uptime}`,
         time,
       });
     } else if (lower === 'uptime') {
       newLines.push({
         id: `${Date.now()}-out`,
         type: 'stdout',
-        text: `up ${host.uptime}, 1 user, load average: 0.28, 0.45, 0.38`,
+        text: `Thời gian hoạt động máy chủ: ${host.uptime} (Trạng thái: ${host.status})`,
         time,
       });
-    } else if (lower.startsWith('ls')) {
+    } else if (lower.includes('version')) {
       newLines.push({
         id: `${Date.now()}-out`,
         type: 'stdout',
-        text: `drwxr-xr-x 4 aston aston 4096 Sep 21 16:00 src\n-rw-r--r-- 1 aston aston 2400 Sep 21 15:40 server.js\n-rw-r--r-- 1 aston aston 1120 Sep 21 15:30 package.json\n-rw------- 1 aston aston  420 Sep 21 14:10 .env\n-rw-r--r-- 1 aston aston  890 Sep 21 14:00 README.md`,
+        text: `${host.runtime} ${host.version} (Môi trường bảo vệ cô lập Aston Cloud Hypervisor)`,
         time,
       });
     } else {
+      // Safe denial of arbitrary execution
       newLines.push({
         id: `${Date.now()}-out`,
-        type: 'stdout',
-        text: `bash: ${cmd}: lệnh được mô phỏng trên máy chủ. (Gõ "help" để xem các lệnh khả dụng)`,
+        type: 'stderr',
+        text: `[Bảo mật] Lệnh "${cmd}" bị từ chối. Bảng điều khiển Console hoạt động ở chế độ an toàn (Chỉ đọc nhật ký trực tiếp và các lệnh chẩn đoán cục bộ). Không hỗ trợ chạy shell tùy ý trên máy chủ.`,
         time,
       });
     }
 
+    isClearedRef.current = false;
     setLines(newLines);
     setCommand('');
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Console Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {/* Connection status */}
+  // Filter lines based on search and level
+  const filteredLines = lines.filter((line) => {
+    const matchesSearch = !search || line.text.toLowerCase().includes(search.toLowerCase());
+    const matchesLevel = levelFilter === 'all' || line.level === levelFilter || line.type === 'command';
+    return matchesSearch && matchesLevel;
+  });
+
+  const getStatusBadge = () => {
+    switch (host.status) {
+      case 'RUNNING':
+        return (
           <div
             className="nm-card"
             style={{
@@ -137,17 +268,130 @@ export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
                 backgroundColor: 'var(--color-success)',
               }}
             />
-            <span style={{ color: 'var(--text-main)' }}>Đã kết nối WebSocket</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>({latency})</span>
+            <span style={{ color: 'var(--text-main)' }}>Đã kết nối (Trực tiếp)</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>Node Agent</span>
           </div>
+        );
+      case 'STOPPED':
+        return (
+          <div
+            className="nm-card"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: '#9ca3af',
+              }}
+            />
+            <span style={{ color: 'var(--text-secondary)' }}>Đã dừng (STOPPED)</span>
+          </div>
+        );
+      case 'PROVISIONING':
+        return (
+          <div
+            className="nm-card"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            <span
+              className="pulse-online"
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--color-warning)',
+              }}
+            />
+            <span style={{ color: 'var(--color-warning)' }}>Đang cấp phát (PROVISIONING)...</span>
+          </div>
+        );
+      case 'ERROR':
+        return (
+          <div
+            className="nm-card"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--color-error)',
+              }}
+            />
+            <span style={{ color: 'var(--color-error)' }}>Lỗi hạ tầng (ERROR)</span>
+          </div>
+        );
+      default:
+        return (
+          <div
+            className="nm-card"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ color: 'var(--text-muted)' }}>Trạng thái: {host.status}</span>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Console Toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          {getStatusBadge()}
 
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            TTY: <strong>/dev/pts/1</strong>
+            Cổng container: <strong>{host.port || 'Chưa cấp'}</strong>
           </span>
         </div>
 
         {/* Toolbar Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => fetchLogs(true)}
+            icon={<RefreshCw size={14} className={isLoading ? 'spin-icon' : ''} />}
+            disabled={isLoading}
+          >
+            Làm mới
+          </Button>
+
           <Button
             variant={autoScroll ? 'inset' : 'secondary'}
             size="sm"
@@ -160,13 +404,68 @@ export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => setLines([])}
+            onClick={handleClearView}
             icon={<Trash2 size={15} />}
           >
             Xóa màn hình
           </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleExportLogs}
+            icon={<Download size={15} />}
+          >
+            Xuất log
+          </Button>
         </div>
       </div>
+
+      {/* Filter & Search Bar */}
+      <Card variant="raised" padding="sm" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+        {/* Search */}
+        <div className="nm-inset" style={{ flex: 1, minWidth: '200px', display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: 'var(--radius-md)' }}>
+          <Search size={15} style={{ color: 'var(--text-muted)' }} />
+          <input
+            type="text"
+            placeholder="Lọc nhật ký theo từ khóa..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              width: '100%',
+              fontSize: '0.84rem',
+              color: 'var(--text-main)',
+            }}
+          />
+        </div>
+
+        {/* Level filter buttons */}
+        <div className="nm-inset" style={{ display: 'inline-flex', padding: '4px', borderRadius: 'var(--radius-md)', gap: '4px' }}>
+          {(['all', 'info', 'warn', 'error', 'debug'] as const).map((lvl) => (
+            <button
+              key={lvl}
+              onClick={() => setLevelFilter(lvl)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: levelFilter === lvl ? 'var(--bg-card)' : 'transparent',
+                boxShadow: levelFilter === lvl ? 'var(--nm-flat-sm)' : 'none',
+                color: levelFilter === lvl ? 'var(--accent-pink)' : 'var(--text-secondary)',
+                fontWeight: levelFilter === lvl ? 700 : 500,
+                fontSize: '0.76rem',
+                cursor: 'pointer',
+                textTransform: 'uppercase',
+              }}
+            >
+              {lvl === 'all' ? 'Tất cả' : lvl}
+            </button>
+          ))}
+        </div>
+      </Card>
 
       {/* Terminal Display Window */}
       <Card
@@ -201,12 +500,15 @@ export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
             <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#ffbd2e', display: 'inline-block' }} />
             <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: '#27c93f', display: 'inline-block' }} />
             <span style={{ fontSize: '0.8rem', color: '#8b949e', marginLeft: '8px' }}>
-              aston-cloud@{host.name}: ~ ({host.runtime})
+              aston-cloud@{host.name}: ~ ({host.runtime} {host.version})
             </span>
           </div>
-          <span style={{ fontSize: '0.72rem', color: 'var(--accent-pink)', fontWeight: 600 }}>
-            Phiên kết nối mã hóa TLS
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <ShieldCheck size={14} style={{ color: 'var(--accent-pink)' }} />
+            <span style={{ fontSize: '0.72rem', color: 'var(--accent-pink)', fontWeight: 600 }}>
+              Cơ chế Cô lập An toàn (Read-Only Logs)
+            </span>
+          </div>
         </div>
 
         {/* Terminal Output Area */}
@@ -223,34 +525,64 @@ export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
             gap: '4px',
           }}
         >
-          {lines.map((line) => (
-            <div key={line.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-              <span style={{ color: '#484f58', fontSize: '0.76rem', userSelect: 'none', minWidth: '60px' }}>
-                {line.time}
-              </span>
-              <pre
-                style={{
-                  margin: 0,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  fontFamily: 'inherit',
-                  color:
-                    line.type === 'command'
-                      ? 'var(--accent-pink)'
-                      : line.type === 'system'
-                      ? '#7ee787'
-                      : line.type === 'stderr'
-                      ? '#ff7b72'
-                      : '#c9d1d9',
-                }}
-              >
-                {line.text}
-              </pre>
+          {filteredLines.length === 0 ? (
+            <div style={{ color: '#8b949e', fontStyle: 'italic', padding: '12px 0' }}>
+              {lines.length === 0
+                ? '[Aston Cloud] Màn hình hiện đang trống. Nhấn "Làm mới" hoặc nhập "refresh" để lấy nhật ký từ hệ thống.'
+                : 'Không tìm thấy dòng nhật ký nào phù hợp với bộ lọc.'}
             </div>
-          ))}
+          ) : (
+            filteredLines.map((line) => (
+              <div key={line.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <span style={{ color: '#484f58', fontSize: '0.76rem', userSelect: 'none', minWidth: '65px' }}>
+                  {line.time}
+                </span>
+
+                {line.level && (
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      userSelect: 'none',
+                      minWidth: '52px',
+                      color:
+                        line.level === 'error'
+                          ? '#ff7b72'
+                          : line.level === 'warn'
+                          ? '#d29922'
+                          : line.level === 'debug'
+                          ? '#d2a8ff'
+                          : '#7ee787',
+                    }}
+                  >
+                    [{line.level.toUpperCase()}]
+                  </span>
+                )}
+
+                <pre
+                  style={{
+                    margin: 0,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontFamily: 'inherit',
+                    color:
+                      line.type === 'command'
+                        ? 'var(--accent-pink)'
+                        : line.level === 'error' || line.type === 'stderr'
+                        ? '#ff7b72'
+                        : line.level === 'warn' || line.type === 'system'
+                        ? '#e3b341'
+                        : '#c9d1d9',
+                  }}
+                >
+                  {line.text}
+                </pre>
+              </div>
+            ))
+          )}
         </div>
 
-        {/* Command Input Bar */}
+        {/* Command Input Bar (Safe predefined commands only) */}
         <form
           onSubmit={handleRunCommand}
           style={{
@@ -265,7 +597,7 @@ export const HostConsoleTab: React.FC<HostConsoleTabProps> = ({ host }) => {
           <span style={{ color: 'var(--accent-pink)', fontWeight: 700 }}>$</span>
           <input
             type="text"
-            placeholder="Nhập lệnh ('help', 'status', 'pm2 list', 'ls', 'version')..."
+            placeholder="Nhập lệnh an toàn ('help', 'status', 'uptime', 'version', 'refresh', 'clear')..."
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             style={{

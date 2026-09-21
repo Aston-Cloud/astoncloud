@@ -88,4 +88,63 @@ export class HostsController {
       next(err);
     }
   }
+
+  public static async streamLogs(req: Request, res: Response, _next: NextFunction): Promise<void> {
+    const user = req.user!;
+    const hostId = req.params.id as string;
+
+    // Verify host ownership first
+    try {
+      await HostsService.getHostById(hostId, user.id, user.role);
+    } catch (err: any) {
+      res.status(err.statusCode || 404).json({
+        success: false,
+        error: { message: err.message || 'Không tìm thấy máy chủ hoặc bạn không có quyền truy cập' },
+      });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    let lastSeenCount = 0;
+    try {
+      const initialLogs = await HostsService.getHostLogs(hostId, user.id, user.role, { tail: 100 });
+      lastSeenCount = initialLogs.total;
+      res.write(`event: init\ndata: ${JSON.stringify(initialLogs)}\n\n`);
+    } catch (err: any) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+    }
+
+    const interval = setInterval(async () => {
+      if (res.writableEnded) {
+        clearInterval(interval);
+        return;
+      }
+
+      try {
+        const currentLogs = await HostsService.getHostLogs(hostId, user.id, user.role, { tail: 100 });
+        if (currentLogs.total > lastSeenCount) {
+          const newEntries = currentLogs.entries?.slice(-(currentLogs.total - lastSeenCount)) || [];
+          const newLines = currentLogs.lines.slice(-(currentLogs.total - lastSeenCount));
+          lastSeenCount = currentLogs.total;
+
+          res.write(
+            `event: log\ndata: ${JSON.stringify({ lines: newLines, entries: newEntries, total: currentLogs.total })}\n\n`
+          );
+        } else {
+          res.write(': ping\n\n');
+        }
+      } catch {
+        // Non-fatal error during polling
+      }
+    }, 1500);
+
+    req.on('close', () => {
+      clearInterval(interval);
+    });
+  }
 }

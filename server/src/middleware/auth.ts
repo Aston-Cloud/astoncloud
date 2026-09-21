@@ -17,15 +17,17 @@ declare global {
  */
 export async function requireAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
+    let token: string | undefined;
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new UnauthorizedError('Vui lòng đăng nhập để thực hiện thao tác này');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    } else if (req.query?.token && typeof req.query.token === 'string') {
+      token = req.query.token;
     }
 
-    const token = authHeader.split(' ')[1];
     if (!token) {
-      throw new UnauthorizedError('Mã xác thực (Token) bị thiếu');
+      throw new UnauthorizedError('Vui lòng đăng nhập để thực hiện thao tác này');
     }
 
     const { user, sessionId } = await AuthService.validateToken(token);
