@@ -66,4 +66,26 @@ export class HostsController {
       next(err);
     }
   }
+
+  public static async getStats(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const stats = await HostsService.getHostStats(hostId, user.id, user.role);
+      sendSuccess(res, { stats });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async getLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const logs = await HostsService.getHostLogs(hostId, user.id, user.role, req.query as any);
+      sendSuccess(res, { logs });
+    } catch (err) {
+      next(err);
+    }
+  }
 }

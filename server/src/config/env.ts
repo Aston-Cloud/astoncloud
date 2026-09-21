@@ -41,6 +41,12 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(16).default('aston_cloud_super_secret_jwt_key_2026_dev_environment_min_32_chars'),
   JWT_EXPIRES_IN: z.string().default('7d'),
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(4).max(16).default(12),
+
+  // Node Agent Client
+  NODE_AGENT_MODE: z.enum(['mock', 'remote']).default('mock'),
+  NODE_AGENT_URL: z.string().default('http://127.0.0.1:5001'),
+  NODE_AGENT_KEY: z.string().default('aston-agent-secret-key-super-secure-32chars-min'),
+  NODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -24,5 +24,11 @@ hostsRouter.patch('/:id', validate({ body: updateHostSchema }), HostsController.
 // DELETE /api/v1/hosts/:id - Delete host
 hostsRouter.delete('/:id', HostsController.deleteHost);
 
-// POST /api/v1/hosts/:id/actions - Prepare state/action (start, stop, restart)
+// POST /api/v1/hosts/:id/actions - Execute lifecycle action (start, stop, restart)
 hostsRouter.post('/:id/actions', validate({ body: hostActionSchema }), HostsController.executeAction);
+
+// GET /api/v1/hosts/:id/stats - Get container live stats
+hostsRouter.get('/:id/stats', HostsController.getStats);
+
+// GET /api/v1/hosts/:id/logs - Get container live logs
+hostsRouter.get('/:id/logs', HostsController.getLogs);

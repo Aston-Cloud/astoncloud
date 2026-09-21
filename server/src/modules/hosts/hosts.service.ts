@@ -1,10 +1,19 @@
 import crypto from 'node:crypto';
 import { query } from '../../db/index.js';
-import { PlansService, FormattedHostingPlan } from '../plans/plans.service.js';
+import { PlansService } from '../plans/plans.service.js';
 import { RuntimesService } from '../runtimes/runtimes.service.js';
-import { NodesService } from '../nodes/nodes.service.js';
-import { BadRequestError, NotFoundError, ForbiddenError, AppError } from '../../utils/errors.js';
-import type { CreateHostInput, UpdateHostInput, HostActionInput } from './hosts.schema.js';
+import { NodesService, NodeRow } from '../nodes/nodes.service.js';
+import { SchedulerService } from '../scheduler/scheduler.service.js';
+import { getNodeAgentClient } from '../node-agent/client.factory.js';
+import { NodeContext } from '../node-agent/node-agent.interface.js';
+import { BadRequestError, NotFoundError, AppError } from '../../utils/errors.js';
+import { logger } from '../../utils/logger.js';
+import type {
+  CreateHostInput,
+  UpdateHostInput,
+  HostActionInput,
+  HostLogsQuery,
+} from './hosts.schema.js';
 
 export type HostStatus =
   | 'PENDING'
@@ -32,6 +41,9 @@ export interface HostRow {
   port: number | null;
   region: string;
   auto_restart: boolean;
+  container_id?: string | null;
+  error_reason?: string | null;
+  idempotency_key?: string | null;
   created_at: Date;
   updated_at: Date;
   // Joined fields
@@ -62,6 +74,9 @@ export interface FormattedHost {
   port: number | null;
   region: string;
   autoRestart: boolean;
+  containerId?: string | null;
+  errorReason?: string | null;
+  idempotencyKey?: string | null;
   createdAt: string;
   updatedAt: string;
   plan?: {
@@ -104,6 +119,9 @@ export function formatHost(row: HostRow): FormattedHost {
     port: row.port,
     region: row.region || 'Singapore',
     autoRestart: row.auto_restart,
+    containerId: row.container_id || null,
+    errorReason: row.error_reason || null,
+    idempotencyKey: row.idempotency_key || null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
     plan: {
@@ -189,7 +207,35 @@ export class HostsService {
   }
 
   /**
-   * Create a new host database record with initial status PENDING
+   * Helper to retrieve NodeContext from node ID
+   */
+  private static async getNodeContext(nodeId: string): Promise<NodeContext> {
+    const node = await NodesService.getNodeById(nodeId);
+    if (!node) {
+      throw new AppError(`Không tìm thấy node cụm "${nodeId}"`, 500);
+    }
+    return {
+      id: node.id,
+      name: node.name,
+      region: node.region,
+      ipAddress: node.ip_address,
+      agentUrl: (node as any).agent_url || 'http://127.0.0.1:5001',
+      agentKey: (node as any).agent_key || undefined,
+    };
+  }
+
+  /**
+   * Full automated host provisioning flow:
+   * 1. Check idempotency
+   * 2. Validate runtime, version, plan, region
+   * 3. Select node & atomically reserve resources
+   * 4. Allocate unique port on node
+   * 5. Insert Host DB record (status: PROVISIONING)
+   * 6. Call NodeAgentClient.createContainer
+   * 7. Call NodeAgentClient.startContainer
+   * 8. Verify running state
+   * 9. Update Host status to RUNNING & record container_id
+   * 10. Automatic rollback & cleanup on any failure
    */
   public static async createHost(userId: string, input: CreateHostInput): Promise<FormattedHost> {
     const cleanRuntime = input.runtimeId.toLowerCase().trim();
@@ -197,7 +243,31 @@ export class HostsService {
     const cleanPlanId = input.planId.toLowerCase().trim();
     const cleanRegion = input.region || 'Singapore';
 
-    // 1. Validate Runtime & Version
+    // 1. Idempotency check
+    if (input.idempotencyKey) {
+      const { rows: existingRows } = await query<HostRow>(
+        `SELECT h.*, 
+                p.name AS plan_name, p.ram_mb AS plan_ram_mb, p.cpu_cores AS plan_cpu_cores, 
+                p.disk_mb AS plan_disk_mb, p.price_monthly AS plan_price_monthly,
+                n.name AS node_name, n.region AS node_region
+         FROM hosts h
+         LEFT JOIN hosting_plans p ON h.plan_id = p.id
+         LEFT JOIN hosting_nodes n ON h.node_id = n.id
+         WHERE h.idempotency_key = $1 AND h.user_id = $2
+         LIMIT 1`,
+        [input.idempotencyKey, userId]
+      );
+
+      if (existingRows.length > 0) {
+        logger.info(
+          { idempotencyKey: input.idempotencyKey, hostId: existingRows[0].id },
+          '[HostsService] Idempotency match: returning existing host record'
+        );
+        return formatHost(existingRows[0]);
+      }
+    }
+
+    // 2. Validate Runtime & Version
     const isRuntimeValid = await RuntimesService.isValidRuntimeAndVersion(
       cleanRuntime,
       cleanVersion
@@ -208,70 +278,192 @@ export class HostsService {
       );
     }
 
-    // 2. Validate Hosting Plan
+    // 3. Validate Hosting Plan
     const plan = await PlansService.getPlanById(cleanPlanId);
     if (!plan) {
       throw new BadRequestError(`Gói dịch vụ "${input.planId}" không tồn tại hoặc đã ngừng cung cấp`);
     }
 
-    // 3. Automated Healthy Node Selection (User cannot select arbitrary infrastructure node)
-    const assignedNode = await NodesService.selectNodeForHost(cleanRegion);
-    if (!assignedNode) {
-      throw new AppError('Hiện không có máy chủ cụm (Node) nào trực tuyến để phân bổ', 503);
+    logger.info(
+      { userId, name: input.name, runtime: cleanRuntime, planId: plan.id, region: cleanRegion },
+      'PROVISIONING_STARTED'
+    );
+
+    // 4. Automated Healthy Node Selection & Atomic Resource Reservation
+    const { node: reservedNode, context: nodeContext } = await SchedulerService.selectAndReserveNode(
+      cleanRegion,
+      plan.cpuCores,
+      plan.ramMb,
+      plan.diskMb
+    );
+
+    logger.info(
+      { nodeId: reservedNode.id, cpu: plan.cpuCores, ram: plan.ramMb, disk: plan.diskMb },
+      'NODE_SELECTED'
+    );
+    logger.info({ nodeId: reservedNode.id }, 'RESOURCES_RESERVED');
+
+    // 5. Allocate Unique Application Port
+    let allocatedPort: number;
+    try {
+      allocatedPort = await SchedulerService.allocatePort(reservedNode.id);
+      logger.info({ nodeId: reservedNode.id, port: allocatedPort }, 'PORT_ALLOCATED');
+    } catch (portErr: any) {
+      // Rollback node resources if port allocation fails
+      await SchedulerService.releaseNodeResources(
+        reservedNode.id,
+        plan.cpuCores,
+        plan.ramMb,
+        plan.diskMb
+      );
+      throw portErr;
     }
 
-    // 4. Generate unique slug
-    let baseSlug = input.name.toLowerCase().trim();
+    // 6. Generate Unique Slug
+    const baseSlug = input.name.toLowerCase().trim();
     let finalSlug = baseSlug;
     const existingSlug = await query('SELECT 1 FROM hosts WHERE slug = $1 LIMIT 1', [finalSlug]);
     if (existingSlug.rowCount && existingSlug.rowCount > 0) {
       finalSlug = `${baseSlug}-${crypto.randomBytes(3).toString('hex')}`;
     }
 
-    // 5. Generate port
-    const allocatedPort = 3000 + Math.floor(Math.random() * 6000);
+    // 7. Insert Host DB record with initial status 'PROVISIONING'
+    let hostRecord: HostRow;
+    try {
+      const { rows } = await query<HostRow>(
+        `INSERT INTO hosts (
+          user_id, plan_id, node_id, name, slug, runtime, runtime_version,
+          status, memory_mb, cpu_limit, disk_mb, port, region, auto_restart,
+          idempotency_key, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PROVISIONING', $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+        RETURNING *`,
+        [
+          userId,
+          plan.id,
+          reservedNode.id,
+          input.name,
+          finalSlug,
+          cleanRuntime,
+          cleanVersion,
+          plan.ramMb,
+          plan.cpuCores,
+          plan.diskMb,
+          allocatedPort,
+          reservedNode.region,
+          input.autoRestart ?? true,
+          input.idempotencyKey || null,
+        ]
+      );
+      hostRecord = rows[0];
+    } catch (insertErr: any) {
+      // Rollback node resources on DB insert error
+      await SchedulerService.releaseNodeResources(
+        reservedNode.id,
+        plan.cpuCores,
+        plan.ramMb,
+        plan.diskMb
+      );
+      throw insertErr;
+    }
 
-    // 6. Enforce plan resource limits strictly from database (User payload cannot override)
-    const cpuLimit = plan.cpuCores;
-    const memoryMb = plan.ramMb;
-    const diskMb = plan.diskMb;
+    // 8. Communicate with Node Agent via NodeAgentClient
+    const agentClient = getNodeAgentClient();
+    let createdContainerId: string | null = null;
 
-    // 7. Insert host with initial status PENDING
-    const { rows } = await query<HostRow>(
-      `INSERT INTO hosts (
-        user_id, plan_id, node_id, name, slug, runtime, runtime_version,
-        status, memory_mb, cpu_limit, disk_mb, port, region, auto_restart,
-        created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, $9, $10, $11, $12, $13, NOW(), NOW())
-      RETURNING *`,
-      [
-        userId,
-        plan.id,
-        assignedNode.id,
-        input.name,
-        finalSlug,
-        cleanRuntime,
-        cleanVersion,
-        memoryMb,
-        cpuLimit,
-        diskMb,
-        allocatedPort,
-        assignedNode.region,
-        input.autoRestart ?? true,
-      ]
-    );
+    try {
+      logger.info({ hostId: hostRecord.id, nodeId: reservedNode.id }, 'CONTAINER_CREATE_STARTED');
 
-    const newHost = rows[0];
-    newHost.plan_name = plan.name;
-    newHost.plan_price_monthly = plan.priceMonthly;
-    newHost.node_name = assignedNode.name;
-    newHost.node_region = assignedNode.region;
+      const containerResult = await agentClient.createContainer(nodeContext, {
+        hostId: hostRecord.id,
+        runtime: cleanRuntime as 'nodejs' | 'bun' | 'python',
+        version: cleanVersion,
+        port: allocatedPort,
+        resources: {
+          cpuLimit: plan.cpuCores,
+          memoryLimitMb: plan.ramMb,
+          diskLimitMb: plan.diskMb,
+          pidsLimit: 200,
+        },
+        env: {
+          NODE_ENV: 'production',
+          PORT: String(allocatedPort),
+        },
+      });
 
-    return formatHost(newHost);
+      createdContainerId = containerResult.containerId;
+      logger.info(
+        { hostId: hostRecord.id, containerId: createdContainerId },
+        'CONTAINER_CREATED'
+      );
+
+      // 9. Start Container
+      logger.info({ hostId: hostRecord.id, containerId: createdContainerId }, 'CONTAINER_START_STARTED');
+      await agentClient.startContainer(nodeContext, createdContainerId);
+      logger.info({ hostId: hostRecord.id, containerId: createdContainerId }, 'CONTAINER_STARTED');
+
+      // 10. Verify Container State
+      const statusResult = await agentClient.getContainerStatus(nodeContext, createdContainerId);
+      if (!statusResult || (statusResult.status !== 'running' && statusResult.status !== 'created')) {
+        throw new AppError('Container không khởi chạy thành công sau bước cấp phát', 500);
+      }
+
+      // 11. Update Host status to RUNNING and persist container_id
+      await query(
+        `UPDATE hosts 
+         SET status = 'RUNNING', container_id = $1, error_reason = NULL, updated_at = NOW() 
+         WHERE id = $2`,
+        [createdContainerId, hostRecord.id]
+      );
+
+      logger.info(
+        { hostId: hostRecord.id, containerId: createdContainerId, port: allocatedPort },
+        'PROVISIONING_COMPLETED'
+      );
+
+      hostRecord.status = 'RUNNING';
+      hostRecord.container_id = createdContainerId;
+      hostRecord.plan_name = plan.name;
+      hostRecord.plan_price_monthly = plan.priceMonthly;
+      hostRecord.node_name = reservedNode.name;
+      hostRecord.node_region = reservedNode.region;
+
+      return formatHost(hostRecord);
+    } catch (provisionErr: any) {
+      const safeReason = provisionErr.message || 'Lỗi cấp phát hạ tầng container';
+      logger.error(
+        { hostId: hostRecord.id, err: safeReason },
+        'PROVISIONING_FAILED'
+      );
+
+      // Rollback host status to ERROR
+      await query(
+        `UPDATE hosts 
+         SET status = 'ERROR', error_reason = $1, updated_at = NOW() 
+         WHERE id = $2`,
+        [safeReason, hostRecord.id]
+      );
+
+      // Rollback Node resources
+      await SchedulerService.releaseNodeResources(
+        reservedNode.id,
+        plan.cpuCores,
+        plan.ramMb,
+        plan.diskMb
+      );
+
+      // Cleanup orphan container if already created
+      if (createdContainerId) {
+        await agentClient.deleteContainer(nodeContext, createdContainerId, true).catch((cleanupErr) => {
+          logger.warn({ containerId: createdContainerId, cleanupErr }, 'Failed to cleanup orphan container');
+        });
+      }
+
+      throw new AppError(`Cấp phát máy chủ thất bại: ${safeReason}`, provisionErr.statusCode || 500);
+    }
   }
 
   /**
-   * Update host settings where appropriate
+   * Update host settings (name, autoRestart)
    */
   public static async updateHost(
     hostId: string,
@@ -279,7 +471,6 @@ export class HostsService {
     role: string,
     input: UpdateHostInput
   ): Promise<FormattedHost> {
-    // Check ownership first
     await this.getHostById(hostId, userId, role);
 
     const updateFields: string[] = [];
@@ -301,7 +492,6 @@ export class HostsService {
     }
 
     updateFields.push(`updated_at = NOW()`);
-
     params.push(hostId);
     const hostIdParam = paramIndex++;
 
@@ -317,21 +507,7 @@ export class HostsService {
   }
 
   /**
-   * Delete host
-   */
-  public static async deleteHost(hostId: string, userId: string, role: string): Promise<void> {
-    // Check ownership first
-    await this.getHostById(hostId, userId, role);
-
-    const whereClause = role === 'ADMIN' ? `WHERE id = $1` : `WHERE id = $1 AND user_id = $2`;
-    const params = role === 'ADMIN' ? [hostId] : [hostId, userId];
-
-    await query(`DELETE FROM hosts ${whereClause}`, params);
-  }
-
-  /**
-   * Prepare API/state architecture for host actions (Start, Stop, Restart)
-   * In this milestone, containers are not provisioned yet (status: PENDING).
+   * Execute lifecycle action (start, stop, restart) connected to NodeAgentClient
    */
   public static async executeAction(
     hostId: string,
@@ -341,12 +517,142 @@ export class HostsService {
   ): Promise<{ message: string; host: FormattedHost; action: string; provisioned: boolean }> {
     const host = await this.getHostById(hostId, userId, role);
 
-    // If host is in PENDING status, return architectural note that Docker provisioning will be in next milestone
-    return {
-      message: `Yêu cầu "${input.action}" đã được ghi nhận. Máy chủ hiện ở trạng thái ${host.status} (chờ cấp phát). Điều khiển container thực tế sẽ được kết nối ở mốc Docker Agent tiếp theo.`,
-      host,
-      action: input.action,
-      provisioned: false,
-    };
+    if (!host.nodeId) {
+      throw new AppError('Máy chủ chưa được gắn vào node hạ tầng', 400);
+    }
+
+    const nodeContext = await this.getNodeContext(host.nodeId);
+    const agentClient = getNodeAgentClient();
+    const containerTarget = host.containerId || host.id;
+
+    if (input.action === 'start') {
+      if (host.status === 'RUNNING') {
+        throw new BadRequestError('Máy chủ hiện đang hoạt động (RUNNING)');
+      }
+
+      await agentClient.startContainer(nodeContext, containerTarget);
+      await query(`UPDATE hosts SET status = $1, updated_at = NOW() WHERE id = $2`, ['RUNNING', hostId]);
+      host.status = 'RUNNING';
+
+      return {
+        message: `Máy chủ "${host.name}" đã được khởi chạy thành công.`,
+        host,
+        action: 'start',
+        provisioned: true,
+      };
+    }
+
+    if (input.action === 'stop') {
+      if (host.status === 'STOPPED') {
+        throw new BadRequestError('Máy chủ hiện đã dừng hoạt động (STOPPED)');
+      }
+
+      await agentClient.stopContainer(nodeContext, containerTarget);
+      await query(`UPDATE hosts SET status = $1, updated_at = NOW() WHERE id = $2`, ['STOPPED', hostId]);
+      host.status = 'STOPPED';
+
+      return {
+        message: `Máy chủ "${host.name}" đã dừng hoạt động an toàn.`,
+        host,
+        action: 'stop',
+        provisioned: true,
+      };
+    }
+
+    if (input.action === 'restart') {
+      await agentClient.restartContainer(nodeContext, containerTarget);
+      await query(`UPDATE hosts SET status = $1, updated_at = NOW() WHERE id = $2`, ['RUNNING', hostId]);
+      host.status = 'RUNNING';
+
+      return {
+        message: `Máy chủ "${host.name}" đã khởi động lại thành công.`,
+        host,
+        action: 'restart',
+        provisioned: true,
+      };
+    }
+
+    throw new BadRequestError(`Hành động "${input.action}" không hợp lệ`);
+  }
+
+  /**
+   * Delete host, cleanly remove container, release node resources
+   */
+  public static async deleteHost(hostId: string, userId: string, role: string): Promise<void> {
+    const host = await this.getHostById(hostId, userId, role);
+
+    // 1. Mark as DELETING
+    await query(`UPDATE hosts SET status = $1, updated_at = NOW() WHERE id = $2`, ['DELETING', hostId]);
+
+    // 2. Remove container from Node Agent if assigned
+    if (host.nodeId && host.containerId) {
+      try {
+        const nodeContext = await this.getNodeContext(host.nodeId);
+        const agentClient = getNodeAgentClient();
+        await agentClient.deleteContainer(nodeContext, host.containerId, true);
+      } catch (err: any) {
+        logger.warn({ hostId, err: err.message }, 'Warning during container deletion on node');
+      }
+    }
+
+    // 3. Release resources on Node
+    if (host.nodeId) {
+      await SchedulerService.releaseNodeResources(
+        host.nodeId,
+        host.cpuLimit,
+        host.memoryLimit,
+        host.diskLimit
+      );
+    }
+
+    // 4. Delete DB record
+    const whereClause = role === 'ADMIN' ? `WHERE id = $1` : `WHERE id = $1 AND user_id = $2`;
+    const params = role === 'ADMIN' ? [hostId] : [hostId, userId];
+    await query(`DELETE FROM hosts ${whereClause}`, params);
+  }
+
+  /**
+   * Fetch live statistics from Node Agent
+   */
+  public static async getHostStats(hostId: string, userId: string, role: string) {
+    const host = await this.getHostById(hostId, userId, role);
+    if (!host.nodeId || !host.containerId) {
+      return {
+        id: host.id,
+        hostId: host.id,
+        cpuPercent: 0,
+        memoryUsageMb: 0,
+        memoryLimitMb: host.memoryLimit,
+        pids: 0,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    const nodeContext = await this.getNodeContext(host.nodeId);
+    const agentClient = getNodeAgentClient();
+    return agentClient.getContainerStats(nodeContext, host.containerId);
+  }
+
+  /**
+   * Fetch live logs from Node Agent
+   */
+  public static async getHostLogs(
+    hostId: string,
+    userId: string,
+    role: string,
+    queryOptions?: HostLogsQuery
+  ) {
+    const host = await this.getHostById(hostId, userId, role);
+    if (!host.nodeId || !host.containerId) {
+      return {
+        id: host.id,
+        lines: ['[Aston Cloud] Máy chủ chưa có container đang chạy hoặc chưa được cấp phát.'],
+        total: 1,
+      };
+    }
+
+    const nodeContext = await this.getNodeContext(host.nodeId);
+    const agentClient = getNodeAgentClient();
+    return agentClient.getContainerLogs(nodeContext, host.containerId, queryOptions);
   }
 }

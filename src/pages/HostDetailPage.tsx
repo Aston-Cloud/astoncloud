@@ -138,7 +138,7 @@ export const HostDetailPage: React.FC<HostDetailPageProps> = ({
 
           {/* Master Control Buttons: Start, Stop, Restart */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {host.status === 'online' ? (
+            {host.status === 'online' || host.status === 'RUNNING' ? (
               <Button
                 variant="danger"
                 size="md"

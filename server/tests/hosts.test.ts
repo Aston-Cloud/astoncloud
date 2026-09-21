@@ -139,7 +139,8 @@ describe('Hosting Core API Test Suite', () => {
       testHostId = host.id;
 
       expect(host.name).toBe('my-production-api');
-      expect(host.status).toBe('PENDING'); // MUST BE PENDING
+      expect(['RUNNING', 'PROVISIONING']).toContain(host.status);
+      expect(host.containerId).toBeDefined();
       expect(host.runtimeId).toBe('nodejs');
       expect(host.runtimeVersion).toBe('20');
       expect(host.planId).toBe('developer');
@@ -256,7 +257,7 @@ describe('Hosting Core API Test Suite', () => {
 
       const found = res.body.data.hosts.find((h: any) => h.id === testHostId);
       expect(found).toBeDefined();
-      expect(found.status).toBe('PENDING');
+      expect(['RUNNING', 'PROVISIONING']).toContain(found.status);
     });
   });
 
@@ -269,7 +270,7 @@ describe('Hosting Core API Test Suite', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.host.id).toBe(testHostId);
-      expect(res.body.data.host.status).toBe('PENDING');
+      expect(['RUNNING', 'PROVISIONING']).toContain(res.body.data.host.status);
     });
 
     it('should return 404 when host does not exist', async () => {
@@ -354,19 +355,31 @@ describe('Hosting Core API Test Suite', () => {
   // 6. Host Actions Architecture (POST /api/v1/hosts/:id/actions)
   // ============================================================================
   describe('POST /api/v1/hosts/:id/actions', () => {
-    it('should accept start action and report pending provisioning state', async () => {
-      const res = await request(app)
+    it('should accept stop and start action and execute real lifecycle transitions', async () => {
+      // Host is currently RUNNING, test stop
+      const stopRes = await request(app)
+        .post(`/api/v1/hosts/${testHostId}/actions`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ action: 'stop' });
+
+      expect(stopRes.status).toBe(200);
+      expect(stopRes.body.success).toBe(true);
+      expect(stopRes.body.data.host.status).toBe('STOPPED');
+      expect(stopRes.body.data.provisioned).toBe(true);
+
+      // Now start it back up
+      const startRes = await request(app)
         .post(`/api/v1/hosts/${testHostId}/actions`)
         .set('Authorization', `Bearer ${userToken}`)
         .send({ action: 'start' });
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.data.provisioned).toBe(false);
-      expect(res.body.data.message).toContain('PENDING');
+      expect(startRes.status).toBe(200);
+      expect(startRes.body.success).toBe(true);
+      expect(startRes.body.data.host.status).toBe('RUNNING');
+      expect(startRes.body.data.provisioned).toBe(true);
     });
 
-    it('should accept restart action and report pending provisioning state', async () => {
+    it('should accept restart action and report running execution state', async () => {
       const res = await request(app)
         .post(`/api/v1/hosts/${testHostId}/actions`)
         .set('Authorization', `Bearer ${userToken}`)
@@ -374,7 +387,8 @@ describe('Hosting Core API Test Suite', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.provisioned).toBe(false);
+      expect(res.body.data.host.status).toBe('RUNNING');
+      expect(res.body.data.provisioned).toBe(true);
     });
   });
 

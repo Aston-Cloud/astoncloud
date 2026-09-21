@@ -31,6 +31,11 @@ export const createHostSchema = z.object({
     .boolean()
     .optional()
     .default(true),
+  idempotencyKey: z
+    .string()
+    .trim()
+    .max(128)
+    .optional(),
 });
 
 export const updateHostSchema = z.object({
@@ -53,6 +58,12 @@ export const hostActionSchema = z.object({
   }),
 });
 
+export const hostLogsQuerySchema = z.object({
+  tail: z.coerce.number().int().min(1).max(1000).optional().default(100),
+  since: z.coerce.number().int().positive().optional(),
+});
+
 export type CreateHostInput = z.infer<typeof createHostSchema>;
 export type UpdateHostInput = z.infer<typeof updateHostSchema>;
 export type HostActionInput = z.infer<typeof hostActionSchema>;
+export type HostLogsQuery = z.infer<typeof hostLogsQuerySchema>;

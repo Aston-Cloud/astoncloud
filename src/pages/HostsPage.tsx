@@ -314,7 +314,7 @@ export const HostsPage: React.FC<HostsPageProps> = ({ onNavigate }) => {
 
                 {/* Inline power controls */}
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  {host.status === 'online' ? (
+                  {host.status === 'online' || host.status === 'RUNNING' ? (
                     <Button
                       variant="secondary"
                       size="sm"

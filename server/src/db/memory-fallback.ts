@@ -47,6 +47,8 @@ export interface MemoryNode {
   available_cpu_cores: number;
   total_disk_mb: number;
   available_disk_mb: number;
+  agent_url?: string;
+  agent_key?: string;
   is_active: boolean;
   created_at: Date;
 }
@@ -68,6 +70,9 @@ export interface MemoryHost {
   port: number;
   region: string;
   auto_restart: boolean;
+  container_id?: string | null;
+  error_reason?: string | null;
+  idempotency_key?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -471,7 +476,32 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
 
   // 14. Query hosting_nodes
   if (q.includes('FROM hosting_nodes')) {
-    if (params.length > 0) {
+    // 14a. Scheduler query checking available resources
+    if (q.includes('available_cpu_cores >= $1') || q.includes('available_ram_mb >=')) {
+      const cpu = Number(params[0]);
+      const ram = Number(params[1]);
+      const disk = Number(params[2]);
+
+      const eligibleNodes = memoryStore.nodes.filter(
+        (n) =>
+          n.status === 'ONLINE' &&
+          n.is_active &&
+          n.available_cpu_cores >= cpu &&
+          n.available_ram_mb >= ram &&
+          n.available_disk_mb >= disk
+      );
+
+      return {
+        command: 'SELECT',
+        rowCount: eligibleNodes.length,
+        oid: 0,
+        fields: [],
+        rows: eligibleNodes as unknown as R[],
+      };
+    }
+
+    // 14b. Region search query
+    if (params.length > 0 && (q.includes('ILIKE') || q.includes('region'))) {
       const region = String(params[0]).replace(/%/g, '').toLowerCase().trim();
       const match =
         memoryStore.nodes.find(
@@ -502,6 +532,68 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     };
   }
 
+  // 14b. UPDATE hosting_nodes (Atomic reservation & resource release)
+  if (q.startsWith('UPDATE hosting_nodes')) {
+    // Check if reservation (subtraction)
+    if (q.includes('available_cpu_cores - $1') || q.includes('available_cpu_cores = available_cpu_cores -')) {
+      const cpu = Number(params[0]);
+      const ram = Number(params[1]);
+      const disk = Number(params[2]);
+      const nodeId = String(params[3]);
+
+      const node = memoryStore.nodes.find(
+        (n) =>
+          n.id === nodeId &&
+          n.status === 'ONLINE' &&
+          n.available_cpu_cores >= cpu &&
+          n.available_ram_mb >= ram &&
+          n.available_disk_mb >= disk
+      );
+
+      if (!node) {
+        return { command: 'UPDATE', rowCount: 0, oid: 0, fields: [], rows: [] };
+      }
+
+      node.available_cpu_cores = Number((node.available_cpu_cores - cpu).toFixed(2));
+      node.available_ram_mb -= ram;
+      node.available_disk_mb -= disk;
+
+      return {
+        command: 'UPDATE',
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+        rows: [node] as unknown as R[],
+      };
+    }
+
+    // Check if release (addition)
+    if (q.includes('available_cpu_cores + $1') || q.includes('available_cpu_cores = available_cpu_cores +')) {
+      const cpu = Number(params[0]);
+      const ram = Number(params[1]);
+      const disk = Number(params[2]);
+      const nodeId = String(params[3]);
+
+      const node = memoryStore.nodes.find((n) => n.id === nodeId);
+      if (node) {
+        node.available_cpu_cores = Math.min(
+          node.total_cpu_cores,
+          Number((node.available_cpu_cores + cpu).toFixed(2))
+        );
+        node.available_ram_mb = Math.min(node.total_ram_mb, node.available_ram_mb + ram);
+        node.available_disk_mb = Math.min(node.total_disk_mb, node.available_disk_mb + disk);
+      }
+
+      return {
+        command: 'UPDATE',
+        rowCount: node ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (node ? [node] : []) as unknown as R[],
+      };
+    }
+  }
+
   // 15. SELECT 1 FROM hosts WHERE slug = $1
   if (q.includes('SELECT 1 FROM hosts WHERE slug = $1')) {
     const slug = String(params[0]);
@@ -515,8 +607,38 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     };
   }
 
+  // 15b. SELECT port FROM hosts WHERE node_id = $1 (Port allocation query)
+  if (q.includes('SELECT port FROM hosts WHERE node_id = $1') || (q.includes('FROM hosts') && q.includes('port IS NOT NULL'))) {
+    const nodeId = String(params[0]);
+    const activePorts = memoryStore.hosts
+      .filter((h) => h.node_id === nodeId && h.port != null && h.status !== 'DELETING')
+      .map((h) => ({ port: h.port }));
+
+    return {
+      command: 'SELECT',
+      rowCount: activePorts.length,
+      oid: 0,
+      fields: [],
+      rows: activePorts as unknown as R[],
+    };
+  }
+
+  // 15c. SELECT * FROM hosts WHERE idempotency_key = $1
+  if (q.includes('idempotency_key = $1') || q.includes('idempotency_key =')) {
+    const key = String(params[0]);
+    const found = memoryStore.hosts.find((h) => h.idempotency_key === key);
+    return {
+      command: 'SELECT',
+      rowCount: found ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (found ? [found] : []) as unknown as R[],
+    };
+  }
+
   // 16. INSERT INTO hosts
   if (q.startsWith('INSERT INTO hosts')) {
+    const statusVal = (q.includes("'PROVISIONING'") ? 'PROVISIONING' : 'PENDING') as MemoryHost['status'];
     const newHost: MemoryHost = {
       id: crypto.randomUUID(),
       user_id: String(params[0]),
@@ -527,13 +649,15 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       runtime: String(params[5]),
       runtime_id: String(params[5]),
       runtime_version: String(params[6]),
-      status: 'PENDING',
+      status: statusVal,
       memory_mb: Number(params[7]),
       cpu_limit: Number(params[8]),
       disk_mb: Number(params[9]),
       port: Number(params[10]),
       region: String(params[11] || 'Singapore'),
       auto_restart: Boolean(params[12] ?? true),
+      container_id: null,
+      idempotency_key: params[13] ? String(params[13]) : null,
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -621,8 +745,49 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
   if (q.startsWith('UPDATE hosts')) {
     const host = memoryStore.hosts.find((h) => params.includes(h.id));
     if (host) {
-      if (params[0] !== undefined) host.name = String(params[0]);
-      if (params[1] !== undefined) host.auto_restart = Boolean(params[1]);
+      // Dynamic updates: status, container_id, error_reason, name, auto_restart
+      if (q.includes("status = 'RUNNING'")) {
+        host.status = 'RUNNING';
+      } else if (q.includes("status = 'ERROR'")) {
+        host.status = 'ERROR';
+      } else if (q.includes("status = 'STOPPED'")) {
+        host.status = 'STOPPED';
+      } else if (q.includes("status = 'DELETING'")) {
+        host.status = 'DELETING';
+      } else if (q.includes("status = 'PROVISIONING'")) {
+        host.status = 'PROVISIONING';
+      } else if (q.includes('status = $')) {
+        const statusIdx = q.indexOf('status = $');
+        const pNum = parseInt(q.slice(statusIdx + 10, statusIdx + 12), 10);
+        if (!isNaN(pNum) && params[pNum - 1] !== undefined) {
+          host.status = String(params[pNum - 1]) as MemoryHost['status'];
+        }
+      }
+
+      if (q.includes('container_id = $')) {
+        const cIdx = q.indexOf('container_id = $');
+        const pNum = parseInt(q.slice(cIdx + 16, cIdx + 18), 10);
+        if (!isNaN(pNum) && params[pNum - 1] !== undefined) {
+          host.container_id = String(params[pNum - 1]);
+        }
+      }
+
+      if (q.includes('error_reason = NULL')) {
+        host.error_reason = null;
+      } else if (q.includes('error_reason = $')) {
+        const eIdx = q.indexOf('error_reason = $');
+        const pNum = parseInt(q.slice(eIdx + 16, eIdx + 18), 10);
+        if (!isNaN(pNum) && params[pNum - 1] !== undefined) {
+          host.error_reason = String(params[pNum - 1]);
+        }
+      }
+
+      if (q.includes('name = $') && params[0] !== undefined) {
+        host.name = String(params[0]);
+      }
+      if (q.includes('auto_restart = $') && params[1] !== undefined) {
+        host.auto_restart = Boolean(params[1]);
+      }
       host.updated_at = new Date();
     }
     return {
