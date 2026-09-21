@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, Menu, ExternalLink, ShieldCheck, Check, Sparkles } from 'lucide-react';
+import { Search, Bell, Menu, ExternalLink, ShieldCheck, Check, Sparkles, LogIn, LogOut } from 'lucide-react';
 import { useAppState } from '../../context/AppStateContext';
 
 interface TopbarProps {
@@ -9,7 +9,15 @@ interface TopbarProps {
 }
 
 export const Topbar: React.FC<TopbarProps> = ({ onOpenSearch, onToggleSidebar, onNavigate }) => {
-  const { userProfile, notifications, markNotificationAsRead, clearNotifications } = useAppState();
+  const {
+    userProfile,
+    notifications,
+    markNotificationAsRead,
+    clearNotifications,
+    isAuthenticated,
+    logout,
+    openAuthModal,
+  } = useAppState();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -245,98 +253,154 @@ export const Topbar: React.FC<TopbarProps> = ({ onOpenSearch, onToggleSidebar, o
           )}
         </div>
 
-        {/* User Profile dropdown */}
-        <div style={{ position: 'relative' }} ref={userRef}>
+        {/* User Profile dropdown / Login button */}
+        {!isAuthenticated ? (
           <button
-            onClick={() => setShowUserMenu(!showUserMenu)}
+            onClick={() => openAuthModal('login')}
             className="nm-btn"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '10px',
-              padding: '6px 14px 6px 6px',
+              gap: '8px',
+              padding: '8px 18px',
               borderRadius: 'var(--radius-full)',
+              color: 'var(--accent-pink)',
+              fontWeight: 700,
+              fontSize: '0.86rem',
             }}
-            aria-label="Menu tài khoản người dùng"
           >
-            <img
-              src={userProfile.avatar}
-              alt={userProfile.name}
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                objectFit: 'cover',
-                border: '2px solid var(--accent-pink-soft)',
-              }}
-            />
-            <div style={{ textAlign: 'left' }}>
-              <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-main)', lineHeight: 1.2 }}>
-                {userProfile.name}
-              </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--accent-pink)', fontWeight: 600 }}>
-                ${userProfile.balance.toFixed(2)} USD
-              </div>
-            </div>
+            <LogIn size={16} />
+            <span>Đăng nhập</span>
           </button>
-
-          {showUserMenu && (
-            <div
-              className="animate-fade-in nm-card"
+        ) : (
+          <div style={{ position: 'relative' }} ref={userRef}>
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className="nm-btn"
               style={{
-                position: 'absolute',
-                top: '52px',
-                right: 0,
-                width: '240px',
-                padding: '12px',
-                boxShadow: 'var(--nm-flat-lg)',
-                borderRadius: 'var(--radius-lg)',
-                zIndex: 100,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '6px 14px 6px 6px',
+                borderRadius: 'var(--radius-full)',
               }}
+              aria-label="Menu tài khoản người dùng"
             >
-              <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(210, 218, 230, 0.4)', marginBottom: '8px' }}>
-                <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{userProfile.name}</div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{userProfile.email}</div>
-              </div>
-
-              <div
-                onClick={() => {
-                  onNavigate('billing');
-                  setShowUserMenu(false);
+              <img
+                src={userProfile.avatar}
+                alt={userProfile.name}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  objectFit: 'cover',
+                  border: '2px solid var(--accent-pink-soft)',
                 }}
-                className="nm-btn"
-                style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px', marginBottom: '4px' }}
-              >
-                <Sparkles size={16} color="var(--accent-pink)" />
-                <span>Nạp số dư (${userProfile.balance.toFixed(2)})</span>
+              />
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-main)', lineHeight: 1.2 }}>
+                  {userProfile.name}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--accent-pink)', fontWeight: 600 }}>
+                  ${userProfile.balance.toFixed(2)} USD
+                </div>
               </div>
+            </button>
 
+            {showUserMenu && (
               <div
-                onClick={() => {
-                  onNavigate('settings');
-                  setShowUserMenu(false);
+                className="animate-fade-in nm-card"
+                style={{
+                  position: 'absolute',
+                  top: '52px',
+                  right: 0,
+                  width: '240px',
+                  padding: '12px',
+                  boxShadow: 'var(--nm-flat-lg)',
+                  borderRadius: 'var(--radius-lg)',
+                  zIndex: 100,
                 }}
-                className="nm-btn"
-                style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px', marginBottom: '4px' }}
               >
-                <ShieldCheck size={16} color="var(--text-muted)" />
-                <span>Cài đặt tài khoản</span>
-              </div>
+                <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(210, 218, 230, 0.4)', marginBottom: '8px' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{userProfile.name}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{userProfile.email}</div>
+                  {userProfile.role && (
+                    <div style={{ marginTop: '4px' }}>
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          borderRadius: 'var(--radius-full)',
+                          fontSize: '0.68rem',
+                          fontWeight: 700,
+                          backgroundColor: userProfile.role === 'ADMIN' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255, 107, 149, 0.12)',
+                          color: userProfile.role === 'ADMIN' ? '#ef4444' : 'var(--accent-pink)',
+                        }}
+                      >
+                        {userProfile.role === 'ADMIN' ? 'Quản trị viên (ADMIN)' : 'Khách hàng (USER)'}
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-              <div
-                onClick={() => {
-                  onNavigate('support');
-                  setShowUserMenu(false);
-                }}
-                className="nm-btn"
-                style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px' }}
-              >
-                <ExternalLink size={16} color="var(--text-muted)" />
-                <span>Hỗ trợ kỹ thuật</span>
+                <div
+                  onClick={() => {
+                    onNavigate('billing');
+                    setShowUserMenu(false);
+                  }}
+                  className="nm-btn"
+                  style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px', marginBottom: '4px' }}
+                >
+                  <Sparkles size={16} color="var(--accent-pink)" />
+                  <span>Nạp số dư (${userProfile.balance.toFixed(2)})</span>
+                </div>
+
+                <div
+                  onClick={() => {
+                    onNavigate('settings');
+                    setShowUserMenu(false);
+                  }}
+                  className="nm-btn"
+                  style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px', marginBottom: '4px' }}
+                >
+                  <ShieldCheck size={16} color="var(--text-muted)" />
+                  <span>Cài đặt tài khoản</span>
+                </div>
+
+                <div
+                  onClick={() => {
+                    onNavigate('support');
+                    setShowUserMenu(false);
+                  }}
+                  className="nm-btn"
+                  style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px', marginBottom: '4px' }}
+                >
+                  <ExternalLink size={16} color="var(--text-muted)" />
+                  <span>Hỗ trợ kỹ thuật</span>
+                </div>
+
+                <div
+                  onClick={() => {
+                    logout();
+                    setShowUserMenu(false);
+                  }}
+                  className="nm-btn"
+                  style={{
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    padding: '8px 12px',
+                    marginTop: '4px',
+                    borderTop: '1px solid rgba(210, 218, 230, 0.4)',
+                    color: '#ef4444',
+                  }}
+                >
+                  <LogOut size={16} color="#ef4444" />
+                  <span>Đăng xuất</span>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

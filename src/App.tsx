@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { ToastProvider } from './context/ToastContext';
-import { AppStateProvider } from './context/AppStateContext';
+import { AppStateProvider, useAppState } from './context/AppStateContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
 import { SearchModal } from './components/layout/SearchModal';
+import { AuthModal } from './components/layout/AuthModal';
 import { DashboardPage } from './pages/DashboardPage';
 import { HostsPage } from './pages/HostsPage';
 import { CreateHostPage } from './pages/CreateHostPage';
@@ -15,6 +16,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { SupportPage } from './pages/SupportPage';
 
 export function AppContent() {
+  const { isAuthModalOpen, closeAuthModal, authModalTab } = useAppState();
+
   // Sync state with URL hash
   const getInitialRoute = () => {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -117,6 +120,13 @@ export function AppContent() {
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
         onNavigate={navigateTo}
+      />
+
+      {/* Neuromorphic Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={closeAuthModal}
+        defaultTab={authModalTab}
       />
     </div>
   );

@@ -69,6 +69,16 @@ interface AppStateContextType {
   updateUserProfile: (profile: Partial<UserProfile>) => void;
   addBalance: (amount: number) => void;
 
+  // Authentication & Auth Modal
+  authToken: string | null;
+  isAuthenticated: boolean;
+  login: (token: string, user?: any) => void;
+  logout: () => void;
+  isAuthModalOpen: boolean;
+  openAuthModal: (tab?: 'login' | 'register') => void;
+  closeAuthModal: () => void;
+  authModalTab: 'login' | 'register';
+
   // Support Tickets
   tickets: SupportTicket[];
   createTicket: (subject: string, department: SupportTicket['department'], priority: SupportTicket['priority'], initialMessage: string) => void;
@@ -121,6 +131,50 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER);
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+
+  // Real Auth State
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    return localStorage.getItem('aston_auth_token');
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return !!localStorage.getItem('aston_auth_token');
+  });
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
+
+  // Verify real backend session on mount or token change
+  useEffect(() => {
+    if (!authToken) {
+      setIsAuthenticated(false);
+      return;
+    }
+
+    fetch('/api/v1/auth/me', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data?.user) {
+          const u = data.data.user;
+          setIsAuthenticated(true);
+          setUserProfile((prev) => ({
+            ...prev,
+            id: u.id,
+            name: u.displayName || u.username,
+            email: u.email,
+            role: u.role,
+            avatar: u.avatarUrl || prev.avatar,
+          }));
+        } else {
+          localStorage.removeItem('aston_auth_token');
+          setAuthToken(null);
+          setIsAuthenticated(false);
+        }
+      })
+      .catch(() => {
+        // Backend offline or unreachable, keep offline state
+      });
+  }, [authToken]);
 
   // Sync to localStorage
   useEffect(() => {
@@ -504,14 +558,71 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
-  // Profile & Billing
+  // Profile & Real Backend Sync
   const updateUserProfile = (profileUpdate: Partial<UserProfile>) => {
     setUserProfile((prev) => ({ ...prev, ...profileUpdate }));
+
+    if (authToken && profileUpdate.name) {
+      fetch('/api/v1/users/me', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          displayName: profileUpdate.name,
+          avatarUrl: profileUpdate.avatar,
+        }),
+      }).catch(() => {});
+    }
+
     showToast({
       title: 'Đã cập nhật hồ sơ',
       message: 'Cài đặt tài khoản của bạn đã được lưu.',
       type: 'success',
     });
+  };
+
+  const login = (token: string, user?: any) => {
+    localStorage.setItem('aston_auth_token', token);
+    setAuthToken(token);
+    setIsAuthenticated(true);
+    if (user) {
+      setUserProfile((prev) => ({
+        ...prev,
+        id: user.id,
+        name: user.displayName || user.username,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatarUrl || prev.avatar,
+      }));
+    }
+  };
+
+  const logout = () => {
+    if (authToken) {
+      fetch('/api/v1/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => {});
+    }
+    localStorage.removeItem('aston_auth_token');
+    setAuthToken(null);
+    setIsAuthenticated(false);
+    showToast({
+      title: 'Đã đăng xuất',
+      message: 'Bạn đã đăng xuất khỏi phiên làm việc an toàn.',
+      type: 'info',
+    });
+  };
+
+  const openAuthModal = (tab: 'login' | 'register' = 'login') => {
+    setAuthModalTab(tab);
+    setIsAuthModalOpen(true);
+  };
+
+  const closeAuthModal = () => {
+    setIsAuthModalOpen(false);
   };
 
   const addBalance = (amount: number) => {
@@ -654,6 +765,14 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         userProfile,
         updateUserProfile,
         addBalance,
+        authToken,
+        isAuthenticated,
+        login,
+        logout,
+        isAuthModalOpen,
+        openAuthModal,
+        closeAuthModal,
+        authModalTab,
         tickets,
         createTicket,
         replyToTicket,
