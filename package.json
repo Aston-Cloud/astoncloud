@@ -12,7 +12,11 @@
     "server:build": "npm --prefix server run build",
     "server:typecheck": "npm --prefix server run typecheck",
     "server:test": "npm --prefix server run test",
-    "server:migrate": "npm --prefix server run migrate"
+    "server:migrate": "npm --prefix server run migrate",
+    "agent:dev": "npm --prefix services/node-agent run dev",
+    "agent:build": "npm --prefix services/node-agent run build",
+    "agent:typecheck": "npm --prefix services/node-agent run typecheck",
+    "agent:test": "npm --prefix services/node-agent run test"
   },
   "dependencies": {
     "lucide-react": "^1.47.0",
