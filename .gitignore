@@ -22,3 +22,4 @@ dist-ssr/
 # Playwright artifacts
 .playwright-mcp/
 *.png
+*.md
