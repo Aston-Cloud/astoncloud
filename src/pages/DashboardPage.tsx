@@ -25,17 +25,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
   const { hosts, userProfile, setCurrentHostId } = useAppState();
 
   const totalHosts = hosts.length;
-  const onlineHosts = hosts.filter((h) => h.status === 'online').length;
+  const onlineHosts = hosts.filter((h) => h.status === 'online' || h.status === 'RUNNING').length;
+  const pendingHosts = hosts.filter((h) => h.status === 'PENDING' || h.status === 'PROVISIONING').length;
 
   const totalStorageGB = hosts.reduce((acc, h) => acc + h.diskTotal, 0);
-  const usedStorageGB = hosts.reduce((acc, h) => acc + h.diskUsage, 0);
+  const usedStorageGB = hosts.reduce((acc, h) => acc + (h.status === 'PENDING' ? 0 : h.diskUsage), 0);
   const storagePercentage = totalStorageGB > 0 ? (usedStorageGB / totalStorageGB) * 100 : 0;
 
   // Average CPU & RAM for online hosts
-  const onlineList = hosts.filter((h) => h.status === 'online');
+  const onlineList = hosts.filter((h) => h.status === 'online' || h.status === 'RUNNING');
   const avgCpu = onlineList.length > 0 ? Math.round(onlineList.reduce((acc, h) => acc + h.cpuUsage, 0) / onlineList.length) : 0;
   const totalRamMB = hosts.reduce((acc, h) => acc + h.ramTotal, 0);
-  const usedRamMB = hosts.reduce((acc, h) => acc + h.ramUsage, 0);
+  const usedRamMB = hosts.reduce((acc, h) => acc + (h.status === 'PENDING' ? 0 : h.ramUsage), 0);
   const ramPercentage = totalRamMB > 0 ? Math.round((usedRamMB / totalRamMB) * 100) : 0;
 
   const handleManageHost = (hostId: string) => {
@@ -366,33 +367,55 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
               </div>
 
               {/* Mini Resource Bars */}
-              <div
-                className="nm-inset"
-                style={{
-                  padding: '12px',
-                  borderRadius: 'var(--radius-md)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '8px',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', marginBottom: '2px', fontWeight: 600 }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Sử dụng CPU</span>
-                    <span style={{ color: 'var(--text-main)' }}>{host.cpuUsage}%</span>
+              {host.status === 'PENDING' || host.status === 'PROVISIONING' ? (
+                <div
+                  className="nm-inset"
+                  style={{
+                    padding: '12px',
+                    borderRadius: 'var(--radius-md)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    background: 'var(--bg-sunken)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', fontWeight: 600 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Cấu hình định mức</span>
+                    <span style={{ color: '#f59e0b' }}>Chờ cấp phát</span>
                   </div>
-                  <ProgressBar value={host.cpuUsage} height={5} color="var(--accent-pink)" />
-                </div>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', marginBottom: '2px', fontWeight: 600 }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Bộ nhớ RAM</span>
-                    <span style={{ color: 'var(--text-main)' }}>
-                      {host.ramUsage} MB / {host.ramTotal} MB
-                    </span>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {host.cpuLimit ? `${host.cpuLimit} vCPU` : host.plan.cpu} • {host.ramTotal} MB RAM • {host.diskTotal} GB
                   </div>
-                  <ProgressBar value={host.ramUsage} max={host.ramTotal} height={5} color="#06b6d4" />
                 </div>
-              </div>
+              ) : (
+                <div
+                  className="nm-inset"
+                  style={{
+                    padding: '12px',
+                    borderRadius: 'var(--radius-md)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', marginBottom: '2px', fontWeight: 600 }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Sử dụng CPU</span>
+                      <span style={{ color: 'var(--text-main)' }}>{host.cpuUsage}%</span>
+                    </div>
+                    <ProgressBar value={host.cpuUsage} height={5} color="var(--accent-pink)" />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', marginBottom: '2px', fontWeight: 600 }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Bộ nhớ RAM</span>
+                      <span style={{ color: 'var(--text-main)' }}>
+                        {host.ramUsage} MB / {host.ramTotal} MB
+                      </span>
+                    </div>
+                    <ProgressBar value={host.ramUsage} max={host.ramTotal} height={5} color="#06b6d4" />
+                  </div>
+                </div>
+              )}
 
               {/* Host Footer */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '4px' }}>

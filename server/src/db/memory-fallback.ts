@@ -1,0 +1,671 @@
+import crypto from 'node:crypto';
+import type pg from 'pg';
+import { logger } from '../utils/logger.js';
+
+export interface MemoryPlan {
+  id: string;
+  name: string;
+  description: string;
+  price_monthly: number;
+  ram_mb: number;
+  cpu_cores: number;
+  disk_mb: number;
+  bandwidth_mb: number;
+  is_active: boolean;
+  created_at: Date;
+}
+
+export interface MemoryRuntime {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  is_active: boolean;
+  created_at: Date;
+}
+
+export interface MemoryRuntimeVersion {
+  id: number;
+  runtime_id: string;
+  runtime: string;
+  version: string;
+  is_default: boolean;
+  is_active: boolean;
+  created_at: Date;
+}
+
+export interface MemoryNode {
+  id: string;
+  name: string;
+  hostname: string;
+  region: string;
+  ip_address: string;
+  status: 'ONLINE' | 'OFFLINE' | 'MAINTENANCE' | 'DRAINING';
+  total_ram_mb: number;
+  available_ram_mb: number;
+  total_cpu_cores: number;
+  available_cpu_cores: number;
+  total_disk_mb: number;
+  available_disk_mb: number;
+  is_active: boolean;
+  created_at: Date;
+}
+
+export interface MemoryHost {
+  id: string;
+  user_id: string;
+  name: string;
+  slug: string;
+  runtime: string;
+  runtime_id: string;
+  runtime_version: string;
+  plan_id: string;
+  node_id: string;
+  status: 'PENDING' | 'PROVISIONING' | 'RUNNING' | 'STOPPED' | 'SUSPENDED' | 'ERROR' | 'DELETING';
+  cpu_limit: number;
+  memory_mb: number;
+  disk_mb: number;
+  port: number;
+  region: string;
+  auto_restart: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface MemoryUser {
+  id: string;
+  email: string;
+  username: string;
+  display_name: string;
+  full_name: string;
+  password_hash: string;
+  role: 'USER' | 'ADMIN';
+  status: 'ACTIVE' | 'SUSPENDED' | 'DISABLED';
+  avatar_url: string | null;
+  created_at: Date;
+  updated_at: Date;
+  last_login_at: Date | null;
+}
+
+export interface MemorySession {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  expires_at: Date;
+  created_at: Date;
+}
+
+class MemoryStore {
+  public users: MemoryUser[] = [
+    {
+      id: 'usr-admin-001',
+      email: 'admin@astoncloud.vn',
+      username: 'admin',
+      display_name: 'Aston Administrator',
+      full_name: 'Aston Administrator',
+      password_hash: '$2b$10$IynC0Nx3j4rxjOl8kUz43ek9R3yYNgf/P7ZNkLJQ.Dg4d7LvE4EHW', // AdminPassword@123
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
+      last_login_at: null,
+    },
+    {
+      id: 'usr-alex-002',
+      email: 'alex.dang@astoncloud.vn',
+      username: 'alex_dang',
+      display_name: 'Alex Đặng',
+      full_name: 'Alex Đặng',
+      password_hash: '$2b$10$g2AxpJ4v9rQVD6O3E6SkMuXv1L7lCAAxwGLukYoZlbTyXjEODNeCq', // Password@123
+      role: 'USER',
+      status: 'ACTIVE',
+      avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
+      last_login_at: null,
+    },
+  ];
+
+  public sessions: MemorySession[] = [];
+
+  public plans: MemoryPlan[] = [
+    {
+      id: 'starter',
+      name: 'Starter',
+      description: 'Gói khởi đầu tối ưu cho bot, API microservice hoặc dự án cá nhân',
+      price_monthly: 49000,
+      ram_mb: 512,
+      cpu_cores: 1.0,
+      disk_mb: 5120,
+      bandwidth_mb: 51200,
+      is_active: true,
+      created_at: new Date(),
+    },
+    {
+      id: 'developer',
+      name: 'Developer',
+      description: 'Gói dành cho lập trình viên phát triển ứng dụng web và API hoàn chỉnh',
+      price_monthly: 129000,
+      ram_mb: 2048,
+      cpu_cores: 2.0,
+      disk_mb: 15360,
+      bandwidth_mb: 153600,
+      is_active: true,
+      created_at: new Date(),
+    },
+    {
+      id: 'pro',
+      name: 'Pro',
+      description: 'Gói chuyên nghiệp hiệu năng cao phục vụ lưu lượng sản xuất lớn',
+      price_monthly: 259000,
+      ram_mb: 4096,
+      cpu_cores: 4.0,
+      disk_mb: 30720,
+      bandwidth_mb: 307200,
+      is_active: true,
+      created_at: new Date(),
+    },
+  ];
+
+  public runtimes: MemoryRuntime[] = [
+    {
+      id: 'nodejs',
+      name: 'Node.js',
+      description: 'Môi trường JavaScript hướng sự kiện phía máy chủ tối ưu cho ứng dụng web và API mở rộng',
+      icon: 'node',
+      is_active: true,
+      created_at: new Date(),
+    },
+    {
+      id: 'bun',
+      name: 'Bun',
+      description: 'Môi trường runtime JavaScript & TypeScript tích hợp all-in-one siêu tốc',
+      icon: 'bun',
+      is_active: true,
+      created_at: new Date(),
+    },
+    {
+      id: 'python',
+      name: 'Python',
+      description: 'Môi trường Python hiện đại tối ưu cho FastAPI, Flask, Django và dịch vụ vi mô AI',
+      icon: 'python',
+      is_active: true,
+      created_at: new Date(),
+    },
+  ];
+
+  public runtimeVersions: MemoryRuntimeVersion[] = [
+    { id: 1, runtime_id: 'nodejs', runtime: 'nodejs', version: '20', is_default: true, is_active: true, created_at: new Date() },
+    { id: 2, runtime_id: 'nodejs', runtime: 'nodejs', version: '22', is_default: false, is_active: true, created_at: new Date() },
+    { id: 3, runtime_id: 'nodejs', runtime: 'nodejs', version: '24', is_default: false, is_active: true, created_at: new Date() },
+    { id: 4, runtime_id: 'bun', runtime: 'bun', version: 'latest', is_default: true, is_active: true, created_at: new Date() },
+    { id: 5, runtime_id: 'bun', runtime: 'bun', version: 'stable', is_default: false, is_active: true, created_at: new Date() },
+    { id: 6, runtime_id: 'python', runtime: 'python', version: '3.11', is_default: false, is_active: true, created_at: new Date() },
+    { id: 7, runtime_id: 'python', runtime: 'python', version: '3.12', is_default: true, is_active: true, created_at: new Date() },
+    { id: 8, runtime_id: 'python', runtime: 'python', version: '3.13', is_default: false, is_active: true, created_at: new Date() },
+  ];
+
+  public nodes: MemoryNode[] = [
+    {
+      id: 'node-sg-01',
+      name: 'Singapore Edge 01 (AWS ap-southeast-1)',
+      hostname: 'sg-node-01.astoncloud.internal',
+      region: 'Singapore',
+      ip_address: '13.212.45.10',
+      status: 'ONLINE',
+      total_ram_mb: 32768,
+      available_ram_mb: 32768,
+      total_cpu_cores: 16.0,
+      available_cpu_cores: 16.0,
+      total_disk_mb: 1048576,
+      available_disk_mb: 1048576,
+      is_active: true,
+      created_at: new Date(),
+    },
+    {
+      id: 'node-tokyo-01',
+      name: 'Tokyo Edge 01 (AWS ap-northeast-1)',
+      hostname: 'jp-node-01.astoncloud.internal',
+      region: 'Tokyo',
+      ip_address: '35.78.112.40',
+      status: 'ONLINE',
+      total_ram_mb: 32768,
+      available_ram_mb: 32768,
+      total_cpu_cores: 16.0,
+      available_cpu_cores: 16.0,
+      total_disk_mb: 1048576,
+      available_disk_mb: 1048576,
+      is_active: true,
+      created_at: new Date(),
+    },
+    {
+      id: 'node-vn-01',
+      name: 'Việt Nam Edge 01 (FPT HCM)',
+      hostname: 'vn-node-01.astoncloud.internal',
+      region: 'Vietnam',
+      ip_address: '103.142.12.8',
+      status: 'ONLINE',
+      total_ram_mb: 32768,
+      available_ram_mb: 32768,
+      total_cpu_cores: 16.0,
+      available_cpu_cores: 16.0,
+      total_disk_mb: 1048576,
+      available_disk_mb: 1048576,
+      is_active: true,
+      created_at: new Date(),
+    },
+  ];
+
+  public hosts: MemoryHost[] = [];
+}
+
+export const memoryStore = new MemoryStore();
+
+/**
+ * Executes a simulated SQL query against the in-memory fallback store
+ */
+export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultRow>(
+  text: string,
+  params: unknown[] = []
+): pg.QueryResult<R> {
+  const q = text.trim();
+
+  // 1. SELECT 1 FROM users WHERE email = $1
+  if (q.includes('SELECT 1 FROM users WHERE email = $1')) {
+    const email = String(params[0]).toLowerCase();
+    const found = memoryStore.users.some((u) => u.email.toLowerCase() === email);
+    return {
+      command: 'SELECT',
+      rowCount: found ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (found ? [{ '?column?': 1 }] : []) as unknown as R[],
+    };
+  }
+
+  // 2. SELECT 1 FROM users WHERE username = $1
+  if (q.includes('SELECT 1 FROM users WHERE username = $1')) {
+    const username = String(params[0]).toLowerCase();
+    const found = memoryStore.users.some((u) => u.username.toLowerCase() === username);
+    return {
+      command: 'SELECT',
+      rowCount: found ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (found ? [{ '?column?': 1 }] : []) as unknown as R[],
+    };
+  }
+
+  // 3. SELECT * FROM users WHERE email = $1 OR username = $1
+  if (q.includes('FROM users WHERE email = $1 OR username = $1')) {
+    const key = String(params[0]).toLowerCase();
+    const user = memoryStore.users.find(
+      (u) => u.email.toLowerCase() === key || u.username.toLowerCase() === key
+    );
+    return {
+      command: 'SELECT',
+      rowCount: user ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (user ? [user] : []) as unknown as R[],
+    };
+  }
+
+  // 4. SELECT * FROM users WHERE id = $1
+  if (q.includes('FROM users WHERE id = $1')) {
+    const id = String(params[0]);
+    const user = memoryStore.users.find((u) => u.id === id);
+    return {
+      command: 'SELECT',
+      rowCount: user ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (user ? [user] : []) as unknown as R[],
+    };
+  }
+
+  // 5. INSERT INTO users
+  if (q.startsWith('INSERT INTO users')) {
+    const newUser: MemoryUser = {
+      id: `usr-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      email: String(params[0]),
+      username: String(params[1]),
+      display_name: String(params[2]),
+      full_name: String(params[2]),
+      password_hash: String(params[3]),
+      role: 'USER',
+      status: 'ACTIVE',
+      avatar_url: String(params[4] || null),
+      created_at: new Date(),
+      updated_at: new Date(),
+      last_login_at: null,
+    };
+    memoryStore.users.push(newUser);
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newUser] as unknown as R[],
+    };
+  }
+
+  // 6. UPDATE users SET last_login_at
+  if (q.includes('UPDATE users SET last_login_at = NOW()')) {
+    const id = String(params[0]);
+    const user = memoryStore.users.find((u) => u.id === id);
+    if (user) {
+      user.last_login_at = new Date();
+      user.updated_at = new Date();
+    }
+    return { command: 'UPDATE', rowCount: user ? 1 : 0, oid: 0, fields: [], rows: [] };
+  }
+
+  // 7. INSERT INTO user_sessions
+  if (q.startsWith('INSERT INTO user_sessions')) {
+    const newSession: MemorySession = {
+      id: String(params[0]),
+      user_id: String(params[1]),
+      token_hash: String(params[2]),
+      ip_address: (params[3] as string) || null,
+      user_agent: (params[4] as string) || null,
+      expires_at: (params[5] as Date) || new Date(Date.now() + 7 * 86400000),
+      created_at: new Date(),
+    };
+    memoryStore.sessions.push(newSession);
+    return { command: 'INSERT', rowCount: 1, oid: 0, fields: [], rows: [] };
+  }
+
+  // 8. SELECT * FROM user_sessions WHERE id = $1 AND expires_at > NOW()
+  if (q.includes('FROM user_sessions WHERE id = $1')) {
+    const id = String(params[0]);
+    const session = memoryStore.sessions.find(
+      (s) => s.id === id && s.expires_at.getTime() > Date.now()
+    );
+    return {
+      command: 'SELECT',
+      rowCount: session ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (session ? [session] : []) as unknown as R[],
+    };
+  }
+
+  // 9. DELETE FROM user_sessions
+  if (q.includes('DELETE FROM user_sessions WHERE id = $1')) {
+    const id = String(params[0]);
+    const idx = memoryStore.sessions.findIndex((s) => s.id === id);
+    if (idx !== -1) memoryStore.sessions.splice(idx, 1);
+    return { command: 'DELETE', rowCount: idx !== -1 ? 1 : 0, oid: 0, fields: [], rows: [] };
+  }
+
+  // 10. SELECT * FROM hosting_plans WHERE is_active = true
+  if (q.includes('FROM hosting_plans') && q.includes('ORDER BY price_monthly ASC')) {
+    const activePlans = memoryStore.plans.filter((p) => p.is_active);
+    return {
+      command: 'SELECT',
+      rowCount: activePlans.length,
+      oid: 0,
+      fields: [],
+      rows: activePlans as unknown as R[],
+    };
+  }
+
+  // 11. SELECT * FROM hosting_plans WHERE id = $1
+  if (q.includes('FROM hosting_plans WHERE id = $1')) {
+    const planId = String(params[0]);
+    const plan = memoryStore.plans.find((p) => p.id === planId && p.is_active);
+    return {
+      command: 'SELECT',
+      rowCount: plan ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (plan ? [plan] : []) as unknown as R[],
+    };
+  }
+
+  // 12. Query runtimes
+  if (q.includes('FROM runtimes')) {
+    const activeRuntimes = memoryStore.runtimes.filter((r) => r.is_active);
+    return {
+      command: 'SELECT',
+      rowCount: activeRuntimes.length,
+      oid: 0,
+      fields: [],
+      rows: activeRuntimes as unknown as R[],
+    };
+  }
+
+  // 13. Query runtime_versions
+  if (q.includes('FROM runtime_versions')) {
+    if (params.length >= 2) {
+      const runtimeId = String(params[0]).toLowerCase();
+      const version = String(params[1]).toLowerCase();
+      const found = memoryStore.runtimeVersions.find(
+        (v) =>
+          (v.runtime_id.toLowerCase() === runtimeId || v.runtime.toLowerCase() === runtimeId) &&
+          v.version.toLowerCase() === version &&
+          v.is_active
+      );
+      return {
+        command: 'SELECT',
+        rowCount: found ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (found ? [found] : []) as unknown as R[],
+      };
+    }
+
+    const activeVersions = memoryStore.runtimeVersions.filter((v) => v.is_active);
+    return {
+      command: 'SELECT',
+      rowCount: activeVersions.length,
+      oid: 0,
+      fields: [],
+      rows: activeVersions as unknown as R[],
+    };
+  }
+
+  // 14. Query hosting_nodes
+  if (q.includes('FROM hosting_nodes')) {
+    if (params.length > 0) {
+      const region = String(params[0]).replace(/%/g, '').toLowerCase().trim();
+      const match =
+        memoryStore.nodes.find(
+          (n) =>
+            n.status === 'ONLINE' &&
+            n.is_active &&
+            (n.region.toLowerCase().includes(region) || region.includes(n.region.toLowerCase()))
+        ) ||
+        memoryStore.nodes.find((n) => n.status === 'ONLINE' && n.is_active) ||
+        memoryStore.nodes[0];
+
+      return {
+        command: 'SELECT',
+        rowCount: match ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (match ? [match] : []) as unknown as R[],
+      };
+    }
+
+    const nodes = memoryStore.nodes.filter((n) => n.is_active);
+    return {
+      command: 'SELECT',
+      rowCount: nodes.length,
+      oid: 0,
+      fields: [],
+      rows: nodes as unknown as R[],
+    };
+  }
+
+  // 15. SELECT 1 FROM hosts WHERE slug = $1
+  if (q.includes('SELECT 1 FROM hosts WHERE slug = $1')) {
+    const slug = String(params[0]);
+    const found = memoryStore.hosts.some((h) => h.slug === slug);
+    return {
+      command: 'SELECT',
+      rowCount: found ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (found ? [{ '?column?': 1 }] : []) as unknown as R[],
+    };
+  }
+
+  // 16. INSERT INTO hosts
+  if (q.startsWith('INSERT INTO hosts')) {
+    const newHost: MemoryHost = {
+      id: crypto.randomUUID(),
+      user_id: String(params[0]),
+      plan_id: String(params[1]),
+      node_id: String(params[2]),
+      name: String(params[3]),
+      slug: String(params[4]),
+      runtime: String(params[5]),
+      runtime_id: String(params[5]),
+      runtime_version: String(params[6]),
+      status: 'PENDING',
+      memory_mb: Number(params[7]),
+      cpu_limit: Number(params[8]),
+      disk_mb: Number(params[9]),
+      port: Number(params[10]),
+      region: String(params[11] || 'Singapore'),
+      auto_restart: Boolean(params[12] ?? true),
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    memoryStore.hosts.push(newHost);
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newHost] as unknown as R[],
+    };
+  }
+
+  // 17. SELECT hosts with JOIN plan and node
+  if (q.startsWith('SELECT') && q.includes('FROM hosts')) {
+    // Single host by id & user_id or id only
+    if (q.includes('WHERE h.id = $1') || q.includes('WHERE hosts.id = $1') || q.includes('WHERE id = $1')) {
+      const hostId = String(params[0]);
+      const host = memoryStore.hosts.find((h) => h.id === hostId);
+
+      if (!host) {
+        return { command: 'SELECT', rowCount: 0, oid: 0, fields: [], rows: [] };
+      }
+
+      const plan = memoryStore.plans.find((p) => p.id === host.plan_id);
+      const node = memoryStore.nodes.find((n) => n.id === host.node_id);
+      const runtime = memoryStore.runtimes.find((r) => r.id === host.runtime_id || r.id === host.runtime);
+
+      const row = {
+        ...host,
+        plan_name: plan?.name,
+        plan_ram_mb: plan?.ram_mb,
+        plan_cpu_cores: plan?.cpu_cores,
+        plan_disk_mb: plan?.disk_mb,
+        plan_price_monthly: plan?.price_monthly,
+        node_name: node?.name,
+        node_region: node?.region,
+        runtime_name: runtime?.name,
+      };
+
+      return {
+        command: 'SELECT',
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+        rows: [row] as unknown as R[],
+      };
+    }
+
+    // List hosts
+    let targetHosts = memoryStore.hosts;
+    if (params.length > 0 && q.includes('user_id = $1')) {
+      const userId = String(params[0]);
+      targetHosts = targetHosts.filter((h) => h.user_id === userId);
+    }
+    targetHosts.sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+
+    const enriched = targetHosts.map((h) => {
+      const plan = memoryStore.plans.find((p) => p.id === h.plan_id);
+      const node = memoryStore.nodes.find((n) => n.id === h.node_id);
+      const runtime = memoryStore.runtimes.find((r) => r.id === h.runtime_id || r.id === h.runtime);
+      return {
+        ...h,
+        plan_name: plan?.name,
+        plan_ram_mb: plan?.ram_mb,
+        plan_cpu_cores: plan?.cpu_cores,
+        plan_disk_mb: plan?.disk_mb,
+        plan_price_monthly: plan?.price_monthly,
+        node_name: node?.name,
+        node_region: node?.region,
+        runtime_name: runtime?.name,
+      };
+    });
+
+    return {
+      command: 'SELECT',
+      rowCount: enriched.length,
+      oid: 0,
+      fields: [],
+      rows: enriched as unknown as R[],
+    };
+  }
+
+  // 18. UPDATE hosts
+  if (q.startsWith('UPDATE hosts')) {
+    const host = memoryStore.hosts.find((h) => params.includes(h.id));
+    if (host) {
+      if (params[0] !== undefined) host.name = String(params[0]);
+      if (params[1] !== undefined) host.auto_restart = Boolean(params[1]);
+      host.updated_at = new Date();
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: host ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (host ? [host] : []) as unknown as R[],
+    };
+  }
+
+  // 19. DELETE FROM hosts
+  if (q.startsWith('DELETE FROM hosts')) {
+    const hostId = String(params[0]);
+    const prevLen = memoryStore.hosts.length;
+    memoryStore.hosts = memoryStore.hosts.filter((h) => h.id !== hostId);
+    const deleted = prevLen > memoryStore.hosts.length;
+    return {
+      command: 'DELETE',
+      rowCount: deleted ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: [],
+    };
+  }
+
+  // Default fallback for SELECT 1 health
+  if (q.includes('SELECT 1 AS health') || q.includes('SELECT 1')) {
+    return {
+      command: 'SELECT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [{ health: 1 }] as unknown as R[],
+    };
+  }
+
+  logger.warn({ query: q }, 'Unmatched memory fallback query executed');
+  return {
+    command: 'SELECT',
+    rowCount: 0,
+    oid: 0,
+    fields: [],
+    rows: [],
+  };
+}

@@ -27,7 +27,24 @@ interface StatusBadgeProps {
 
 export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
   const getStatusConfig = () => {
-    switch (status) {
+    const normalized = (status || '').toString().trim();
+    switch (normalized) {
+      case 'PENDING':
+        return {
+          label: 'Chờ cấp phát (Pending)',
+          color: '#f59e0b',
+          bg: 'rgba(245, 158, 11, 0.14)',
+          glow: true,
+        };
+      case 'PROVISIONING':
+      case 'provisioning':
+        return {
+          label: 'Đang cấp phát',
+          color: 'var(--accent-pink)',
+          bg: 'var(--accent-pink-light)',
+          glow: true,
+        };
+      case 'RUNNING':
       case 'online':
       case 'active':
       case 'ready':
@@ -35,17 +52,40 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' })
       case 'resolved':
         return {
           label:
-            status === 'paid'
+            normalized === 'paid'
               ? 'Đã thanh toán'
-              : status === 'resolved'
+              : normalized === 'resolved'
               ? 'Đã xử lý'
-              : status === 'active'
+              : normalized === 'active'
               ? 'Hoạt động'
-              : status === 'ready'
+              : normalized === 'ready'
               ? 'Sẵn sàng'
+              : normalized === 'RUNNING'
+              ? 'Đang chạy'
               : 'Trực tuyến',
           color: 'var(--color-success)',
           bg: 'var(--color-success-bg)',
+          glow: true,
+        };
+      case 'STOPPED':
+        return {
+          label: 'Đã dừng',
+          color: 'var(--text-muted)',
+          bg: 'var(--bg-sunken)',
+          glow: false,
+        };
+      case 'SUSPENDED':
+        return {
+          label: 'Tạm ngưng',
+          color: 'var(--color-warning)',
+          bg: 'var(--color-warning-bg)',
+          glow: false,
+        };
+      case 'DELETING':
+        return {
+          label: 'Đang xóa',
+          color: 'var(--color-error)',
+          bg: 'var(--color-error-bg)',
           glow: true,
         };
       case 'starting':
@@ -53,7 +93,6 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' })
       case 'creating':
       case 'restoring':
       case 'verifying':
-      case 'provisioning':
       case 'in_progress':
         return {
           label:

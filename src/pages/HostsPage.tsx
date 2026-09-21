@@ -29,7 +29,7 @@ export const HostsPage: React.FC<HostsPageProps> = ({ onNavigate }) => {
   const { hosts, setCurrentHostId, startHost, stopHost, restartHost } = useAppState();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'online' | 'offline'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'online' | 'pending' | 'offline'>('all');
   const [runtimeFilter, setRuntimeFilter] = useState<'all' | 'nodejs' | 'bun' | 'python'>('all');
 
   const filteredHosts = hosts.filter((host) => {
@@ -40,8 +40,9 @@ export const HostsPage: React.FC<HostsPageProps> = ({ onNavigate }) => {
 
     const matchesStatus =
       statusFilter === 'all' ||
-      (statusFilter === 'online' && host.status === 'online') ||
-      (statusFilter === 'offline' && (host.status === 'offline' || host.status === 'error'));
+      (statusFilter === 'online' && (host.status === 'online' || host.status === 'RUNNING')) ||
+      (statusFilter === 'pending' && (host.status === 'PENDING' || host.status === 'PROVISIONING')) ||
+      (statusFilter === 'offline' && (host.status === 'offline' || host.status === 'STOPPED' || host.status === 'SUSPENDED' || host.status === 'error'));
 
     const matchesRuntime = runtimeFilter === 'all' || host.runtime === runtimeFilter;
 
@@ -92,7 +93,7 @@ export const HostsPage: React.FC<HostsPageProps> = ({ onNavigate }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {/* Status Filter */}
             <div className="nm-inset" style={{ display: 'inline-flex', padding: '4px', borderRadius: 'var(--radius-md)', gap: '4px' }}>
-              {(['all', 'online', 'offline'] as const).map((st) => (
+              {(['all', 'online', 'pending', 'offline'] as const).map((st) => (
                 <button
                   key={st}
                   onClick={() => setStatusFilter(st)}
@@ -109,7 +110,13 @@ export const HostsPage: React.FC<HostsPageProps> = ({ onNavigate }) => {
                     transition: 'all var(--transition-fast)',
                   }}
                 >
-                  {st === 'all' ? 'Tất cả' : st === 'online' ? 'Trực tuyến' : 'Ngoại tuyến'}
+                  {st === 'all'
+                    ? 'Tất cả'
+                    : st === 'online'
+                    ? 'Trực tuyến'
+                    : st === 'pending'
+                    ? 'Chờ cấp phát'
+                    : 'Ngoại tuyến'}
                 </button>
               ))}
             </div>
@@ -226,53 +233,78 @@ export const HostsPage: React.FC<HostsPageProps> = ({ onNavigate }) => {
               </div>
 
               {/* Resource Metrics */}
-              <div
-                className="nm-inset"
-                style={{
-                  padding: '14px',
-                  borderRadius: 'var(--radius-md)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px',
-                }}
-              >
-                {/* CPU */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: '4px', fontWeight: 600 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
-                      <Cpu size={14} color="var(--accent-pink)" /> CPU
-                    </span>
-                    <span style={{ color: 'var(--text-main)' }}>{host.cpuUsage}%</span>
+              {host.status === 'PENDING' || host.status === 'PROVISIONING' ? (
+                <div
+                  className="nm-inset"
+                  style={{
+                    padding: '14px',
+                    borderRadius: 'var(--radius-md)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    background: 'var(--bg-sunken)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Trạng thái tài nguyên:</span>
+                    <span style={{ fontWeight: 700, color: '#f59e0b', fontSize: '0.75rem' }}>Chưa khởi chạy container</span>
                   </div>
-                  <ProgressBar value={host.cpuUsage} height={6} color="var(--accent-pink)" />
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                    Định mức đăng ký: <strong>{host.cpuLimit ? `${host.cpuLimit} vCPU` : host.plan.cpu}</strong> • <strong>{host.ramTotal} MB RAM</strong> • <strong>{host.diskTotal} GB NVMe</strong>
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#f59e0b', fontStyle: 'italic' }}>
+                    * Hạ tầng đang chờ Node Agent điều phối container thực tế.
+                  </div>
                 </div>
+              ) : (
+                <div
+                  className="nm-inset"
+                  style={{
+                    padding: '14px',
+                    borderRadius: 'var(--radius-md)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                  }}
+                >
+                  {/* CPU */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: '4px', fontWeight: 600 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                        <Cpu size={14} color="var(--accent-pink)" /> CPU
+                      </span>
+                      <span style={{ color: 'var(--text-main)' }}>{host.cpuUsage}%</span>
+                    </div>
+                    <ProgressBar value={host.cpuUsage} height={6} color="var(--accent-pink)" />
+                  </div>
 
-                {/* RAM */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: '4px', fontWeight: 600 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
-                      <Layers size={14} color="#06b6d4" /> RAM
-                    </span>
-                    <span style={{ color: 'var(--text-main)' }}>
-                      {host.ramUsage} MB / {host.ramTotal} MB
-                    </span>
+                  {/* RAM */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: '4px', fontWeight: 600 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                        <Layers size={14} color="#06b6d4" /> RAM
+                      </span>
+                      <span style={{ color: 'var(--text-main)' }}>
+                        {host.ramUsage} MB / {host.ramTotal} MB
+                      </span>
+                    </div>
+                    <ProgressBar value={host.ramUsage} max={host.ramTotal} height={6} color="#06b6d4" />
                   </div>
-                  <ProgressBar value={host.ramUsage} max={host.ramTotal} height={6} color="#06b6d4" />
-                </div>
 
-                {/* Disk */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: '4px', fontWeight: 600 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
-                      <HardDrive size={14} color="#10b981" /> Ổ cứng
-                    </span>
-                    <span style={{ color: 'var(--text-main)' }}>
-                      {host.diskUsage} GB / {host.diskTotal} GB
-                    </span>
+                  {/* Disk */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: '4px', fontWeight: 600 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                        <HardDrive size={14} color="#10b981" /> Ổ cứng
+                      </span>
+                      <span style={{ color: 'var(--text-main)' }}>
+                        {host.diskUsage} GB / {host.diskTotal} GB
+                      </span>
+                    </div>
+                    <ProgressBar value={host.diskUsage} max={host.diskTotal} height={6} color="#10b981" />
                   </div>
-                  <ProgressBar value={host.diskUsage} max={host.diskTotal} height={6} color="#10b981" />
                 </div>
-              </div>
+              )}
 
               {/* Uptime & Quick Controls */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem' }}>

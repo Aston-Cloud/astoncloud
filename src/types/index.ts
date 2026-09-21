@@ -1,38 +1,64 @@
 export type RuntimeType = 'nodejs' | 'bun' | 'python';
 
-export type HostStatus = 'online' | 'offline' | 'starting' | 'restarting' | 'error';
+export type HostStatus =
+  | 'PENDING'
+  | 'PROVISIONING'
+  | 'RUNNING'
+  | 'STOPPED'
+  | 'SUSPENDED'
+  | 'ERROR'
+  | 'DELETING'
+  | 'online'
+  | 'offline'
+  | 'starting'
+  | 'restarting'
+  | 'error';
 
 export interface HostingPlan {
   id: string;
   name: string;
-  price: number; // monthly in USD
+  price: number; // monthly in VND or display unit
   cpu: string; // e.g. "2 vCPU"
   ram: string; // e.g. "2 GB"
   disk: string; // e.g. "25 GB NVMe"
   bandwidth: string; // e.g. "2 TB"
   recommended?: boolean;
+  cpuCores?: number;
+  ramMb?: number;
+  diskMb?: number;
+  priceMonthly?: number;
 }
 
 export interface Host {
   id: string;
+  numericId?: number;
   name: string;
   slug: string;
   runtime: RuntimeType;
+  runtimeId?: string;
   version: string;
+  runtimeVersion?: string;
   status: HostStatus;
   plan: HostingPlan;
+  planId?: string;
+  nodeId?: string | null;
+  userId?: string;
   region: string;
   regionFlag: string;
   ipAddress: string;
   port: number;
   uptime: string;
   uptimeSeconds: number;
-  cpuUsage: number; // percentage 0-100
-  ramUsage: number; // MB or percentage
+  cpuUsage: number; // percentage 0-100 or 0 when pending
+  ramUsage: number; // MB or percentage or 0 when pending
   ramTotal: number; // MB
-  diskUsage: number; // GB
+  diskUsage: number; // GB or 0 when pending
   diskTotal: number; // GB
+  cpuLimit?: number;
+  memoryLimit?: number;
+  diskLimit?: number;
   createdAt: string;
+  updatedAt?: string;
   repoUrl?: string;
   autoRestart: boolean;
 }

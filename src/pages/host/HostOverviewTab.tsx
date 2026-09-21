@@ -39,11 +39,50 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const ramPercentage = Math.round((host.ramUsage / host.ramTotal) * 100);
-  const diskPercentage = Math.round((host.diskUsage / host.diskTotal) * 100);
+  const isPending = host.status === 'PENDING' || host.status === 'PROVISIONING';
+  const ramPercentage = isPending ? 0 : Math.round((host.ramUsage / host.ramTotal) * 100);
+  const diskPercentage = isPending ? 0 : Math.round((host.diskUsage / host.diskTotal) * 100);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Pending Infrastructure Alert Banner */}
+      {isPending && (
+        <Card
+          variant="raised"
+          padding="md"
+          style={{
+            background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, var(--bg-card) 100%)',
+            borderLeft: '4px solid #f59e0b',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '10px',
+                background: 'rgba(245, 158, 11, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#f59e0b',
+                flexShrink: 0,
+              }}
+            >
+              <Clock size={20} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-main)', marginBottom: '4px' }}>
+                Trạng thái Hạ tầng: Chờ cấp phát (Pending)
+              </div>
+              <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>
+                Máy chủ đã được khởi tạo và lưu trữ thành công trong cơ sở dữ liệu. Môi trường container chưa được triển khai trên node vì hệ thống đang hoàn thiện kết nối Node Agent. Các chức năng điều khiển (Start/Stop/Restart) và số liệu thời gian thực sẽ khả dụng khi container được phân bổ.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Resource Gauges Trio */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
         {/* CPU */}
@@ -53,15 +92,15 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
               Cấu hình Phân bổ CPU
             </span>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-pink)', background: 'var(--accent-pink-light)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
-              {host.plan.cpu}
+              {host.cpuLimit ? `${host.cpuLimit} vCPU` : host.plan.cpu}
             </span>
           </div>
           <div className="nm-inset" style={{ borderRadius: 'var(--radius-md)', padding: '4px' }}>
             <ResourceGauge
               label="Tải Điện toán Thực tế"
-              value={host.cpuUsage}
-              displayValue={`${host.cpuUsage}%`}
-              subText="Đa luồng thời gian thực"
+              value={isPending ? 0 : host.cpuUsage}
+              displayValue={isPending ? 'Chưa khả dụng' : `${host.cpuUsage}%`}
+              subText={isPending ? 'Chờ cấp phát container' : 'Đa luồng thời gian thực'}
               color="var(--accent-pink)"
               size="md"
             />
@@ -82,8 +121,8 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
             <ResourceGauge
               label="RAM Đang sử dụng"
               value={ramPercentage}
-              displayValue={`${host.ramUsage} MB`}
-              subText={`trên tổng ${host.ramTotal} MB`}
+              displayValue={isPending ? 'Chưa khả dụng' : `${host.ramUsage} MB`}
+              subText={isPending ? `Định mức: ${host.ramTotal} MB` : `trên tổng ${host.ramTotal} MB`}
               color="#06b6d4"
               size="md"
             />
@@ -104,8 +143,8 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
             <ResourceGauge
               label="Dung lượng Đã dùng"
               value={diskPercentage}
-              displayValue={`${host.diskUsage} GB`}
-              subText={`còn trống ${(host.diskTotal - host.diskUsage).toFixed(1)} GB`}
+              displayValue={isPending ? 'Chưa khả dụng' : `${host.diskUsage} GB`}
+              subText={isPending ? `Định mức: ${host.diskTotal} GB NVMe` : `còn trống ${(host.diskTotal - host.diskUsage).toFixed(1)} GB`}
               color="#10b981"
               size="md"
             />

@@ -10,6 +10,7 @@ import {
   SupportTicket,
   UserProfile,
   NotificationItem,
+  RuntimeType,
 } from '../types';
 import {
   INITIAL_HOSTS,
@@ -33,8 +34,9 @@ interface AppStateContextType {
   startHost: (id: string) => void;
   stopHost: (id: string) => void;
   restartHost: (id: string) => void;
-  createHost: (newHostData: Omit<Host, 'id' | 'createdAt' | 'uptime' | 'uptimeSeconds' | 'cpuUsage' | 'ramUsage' | 'diskUsage'>) => Host;
-  deleteHost: (id: string) => void;
+  createHost: (newHostData: Omit<Host, 'id' | 'createdAt' | 'uptime' | 'uptimeSeconds' | 'cpuUsage' | 'ramUsage' | 'diskUsage'>) => Promise<Host> | Host;
+  deleteHost: (id: string) => Promise<void> | void;
+  refreshHosts: () => Promise<void>;
 
   // Files
   files: Record<string, FileItem[]>;
@@ -142,6 +144,85 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
 
+  // Refresh backend hosts
+  const fetchBackendHosts = async (token: string) => {
+    try {
+      const res = await fetch('/api/v1/hosts', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data?.hosts)) {
+        const mapped: Host[] = data.data.hosts.map((h: any) => {
+          const planRamMb = h.memoryLimit || h.ramLimitMb || (h.planId === 'developer' ? 2048 : h.planId === 'pro' ? 4096 : 512);
+          const planDiskGb = (h.diskLimit ? Math.round(h.diskLimit / 1024) : 0) || h.diskLimitGb || (h.planId === 'developer' ? 15 : h.planId === 'pro' ? 30 : 5);
+          const planCpu = h.cpuLimit ? `${h.cpuLimit} vCPU` : (h.plan?.cpu || (h.planId === 'developer' ? '2 vCPU' : h.planId === 'pro' ? '4 vCPU' : '1 vCPU'));
+          const nodeName = h.node?.name || h.nodeName;
+          const nodeRegion = h.node?.region || h.nodeRegion;
+          const regionStr = h.region || (nodeRegion ? `${nodeRegion} (${nodeName})` : 'Singapore (ap-southeast-1)');
+          return {
+            id: `host-${h.id}`,
+            numericId: h.id,
+            name: h.name,
+            slug: h.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+            runtime: (h.runtimeId || 'nodejs') as RuntimeType,
+            runtimeId: h.runtimeId,
+            version: `${h.runtimeId === 'python' ? 'Python' : h.runtimeId === 'bun' ? 'Bun' : 'Node.js'} ${h.runtimeVersion}`,
+            runtimeVersion: h.runtimeVersion,
+            status: h.status,
+            plan: {
+              id: h.planId,
+              name: h.plan?.name || h.planName || (h.planId === 'developer' ? 'Developer Cloud' : h.planId === 'pro' ? 'Pro Scale' : 'Starter Cloud'),
+              price: h.plan?.price || (h.planId === 'developer' ? 129000 : h.planId === 'pro' ? 259000 : 49000),
+              cpu: planCpu,
+              ram: `${Math.round(planRamMb / 1024)} GB`,
+              disk: `${planDiskGb} GB NVMe`,
+              bandwidth: '1 TB',
+              cpuCores: h.cpuLimit,
+              ramMb: planRamMb,
+              diskMb: planDiskGb * 1024,
+            },
+            planId: h.planId,
+            nodeId: h.nodeId,
+            userId: h.userId,
+            region: regionStr,
+            regionFlag: (regionStr.includes('Tokyo')) ? '🇯🇵' : (regionStr.includes('Vietnam')) ? '🇻🇳' : '🇸🇬',
+            ipAddress: h.nodeIp || '128.199.204.15',
+            port: h.port || (h.runtimeId === 'python' ? 8000 : h.runtimeId === 'bun' ? 8080 : 3000),
+            uptime: h.status === 'PENDING' ? 'Chưa khả dụng (Pending)' : h.status === 'RUNNING' ? '1 phút' : '0 phút',
+            uptimeSeconds: 0,
+            cpuUsage: 0,
+            ramUsage: 0,
+            ramTotal: planRamMb,
+            diskUsage: 0,
+            diskTotal: planDiskGb,
+            cpuLimit: h.cpuLimit,
+            memoryLimit: planRamMb,
+            diskLimit: planDiskGb,
+            createdAt: h.createdAt,
+            updatedAt: h.updatedAt,
+            primaryDomain: `${h.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}.astoncloud.vn`,
+            autoRestart: true,
+          };
+        });
+        setHosts(mapped);
+        if (mapped.length > 0) {
+          setCurrentHostId((prev) => {
+            const exists = mapped.some((m) => m.id === prev);
+            return exists ? prev : mapped[0].id;
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch backend hosts:', err);
+    }
+  };
+
+  const refreshHosts = async () => {
+    if (authToken) {
+      await fetchBackendHosts(authToken);
+    }
+  };
+
   // Verify real backend session on mount or token change
   useEffect(() => {
     if (!authToken) {
@@ -165,6 +246,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             role: u.role,
             avatar: u.avatarUrl || prev.avatar,
           }));
+          fetchBackendHosts(authToken);
         } else {
           localStorage.removeItem('aston_auth_token');
           setAuthToken(null);
@@ -203,6 +285,16 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const startHost = (id: string) => {
+    const target = hosts.find((h) => h.id === id);
+    if (target?.status === 'PENDING') {
+      showToast({
+        title: 'Hạ tầng đang chuẩn bị',
+        message: 'Máy chủ đang ở trạng thái Chờ cấp phát (Pending). Container chưa được triển khai trên node. Tính năng điều khiển container sẽ khả dụng khi kết nối Node Agent.',
+        type: 'info',
+      });
+      return;
+    }
+
     setHosts((prev) =>
       prev.map((h) => {
         if (h.id === id) {
@@ -226,6 +318,16 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const stopHost = (id: string) => {
+    const target = hosts.find((h) => h.id === id);
+    if (target?.status === 'PENDING') {
+      showToast({
+        title: 'Chưa khởi chạy container',
+        message: 'Máy chủ đang ở trạng thái Chờ cấp phát (Pending). Không có tiến trình container nào đang hoạt động.',
+        type: 'info',
+      });
+      return;
+    }
+
     setHosts((prev) =>
       prev.map((h) => {
         if (h.id === id) {
@@ -249,6 +351,16 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const restartHost = (id: string) => {
+    const target = hosts.find((h) => h.id === id);
+    if (target?.status === 'PENDING') {
+      showToast({
+        title: 'Hạ tầng đang chuẩn bị',
+        message: 'Máy chủ đang ở trạng thái Chờ cấp phát (Pending). Tính năng khởi động lại sẽ khả dụng sau khi hoàn thành cấp phát container.',
+        type: 'info',
+      });
+      return;
+    }
+
     setHosts((prev) =>
       prev.map((h) => {
         if (h.id === id) {
@@ -290,22 +402,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }, 1500);
   };
 
-  const createHost = (newHostData: Omit<Host, 'id' | 'createdAt' | 'uptime' | 'uptimeSeconds' | 'cpuUsage' | 'ramUsage' | 'diskUsage'>) => {
-    const newId = `host-${Date.now()}`;
-    const newHost: Host = {
-      ...newHostData,
-      id: newId,
-      createdAt: new Date().toISOString(),
-      uptime: '1 phút (Mới tạo)',
-      uptimeSeconds: 60,
-      cpuUsage: 8,
-      ramUsage: Math.floor(newHostData.ramTotal * 0.2),
-      diskUsage: 0.8,
-    };
-
-    setHosts((prev) => [newHost, ...prev]);
-
-    // Initial files for this runtime
+  const initHostDefaults = (newId: string, host: Host) => {
     const defaultFiles: FileItem[] = [
       {
         id: `f-${Date.now()}-1`,
@@ -316,14 +413,14 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       },
       {
         id: `f-${Date.now()}-2`,
-        name: newHost.runtime === 'python' ? 'main.py' : newHost.runtime === 'bun' ? 'index.ts' : 'index.js',
-        path: `/app/${newHost.runtime === 'python' ? 'main.py' : newHost.runtime === 'bun' ? 'index.ts' : 'index.js'}`,
+        name: host.runtime === 'python' ? 'main.py' : host.runtime === 'bun' ? 'index.ts' : 'index.js',
+        path: `/app/${host.runtime === 'python' ? 'main.py' : host.runtime === 'bun' ? 'index.ts' : 'index.js'}`,
         isDirectory: false,
         size: '512 B',
         updatedAt: 'Vừa xong',
-        content: newHost.runtime === 'python'
+        content: host.runtime === 'python'
           ? `from fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get("/")\ndef read_root():\n    return {"message": "Xin chào từ Aston Cloud Python!"}\n`
-          : newHost.runtime === 'bun'
+          : host.runtime === 'bun'
           ? `export default {\n  port: 8080,\n  fetch(req) {\n    return new Response("Xin chào từ Aston Cloud Bun Server!");\n  },\n};\n`
           : `const http = require('http');\nconst server = http.createServer((req, res) => {\n  res.writeHead(200, {'Content-Type': 'application/json'});\n  res.end(JSON.stringify({ message: 'Xin chào từ Aston Cloud Node.js!' }));\n});\nserver.listen(process.env.PORT || 3000);\n`,
       },
@@ -334,7 +431,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         isDirectory: false,
         size: '120 B',
         updatedAt: 'Vừa xong',
-        content: `PORT=${newHost.port}\nNODE_ENV=production\n`,
+        content: `PORT=${host.port}\nNODE_ENV=production\n`,
       },
     ];
 
@@ -342,29 +439,149 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setEnvVars((prev) => ({
       ...prev,
       [newId]: [
-        { id: `env-${Date.now()}-1`, key: 'PORT', value: `${newHost.port}`, isSecret: false, updatedAt: 'Vừa xong' },
+        { id: `env-${Date.now()}-1`, key: 'PORT', value: `${host.port}`, isSecret: false, updatedAt: 'Vừa xong' },
         { id: `env-${Date.now()}-2`, key: 'ENV', value: 'production', isSecret: false, updatedAt: 'Vừa xong' },
       ],
     }));
     setLogs((prev) => ({
       ...prev,
       [newId]: [
-        { id: `l-${Date.now()}-1`, timestamp: new Date().toLocaleTimeString(), level: 'info', source: 'system', message: `Máy chủ ${newHost.name} đã được khởi tạo thành công.` },
-        { id: `l-${Date.now()}-2`, timestamp: new Date().toLocaleTimeString(), level: 'info', source: 'runtime', message: `Đang lắng nghe kết nối tại cổng ${newHost.port}` },
+        { id: `l-${Date.now()}-1`, timestamp: new Date().toLocaleTimeString(), level: 'info', source: 'system', message: `Máy chủ ${host.name} đã được ghi nhận trong cơ sở dữ liệu với trạng thái PENDING.` },
+        { id: `l-${Date.now()}-2`, timestamp: new Date().toLocaleTimeString(), level: 'info', source: 'runtime', message: `Đang chờ Node Agent cấp phát container thực tế tại cổng ${host.port}` },
       ],
     }));
+  };
+
+  const createHost = async (newHostData: Omit<Host, 'id' | 'createdAt' | 'uptime' | 'uptimeSeconds' | 'cpuUsage' | 'ramUsage' | 'diskUsage'>): Promise<Host> => {
+    // If authenticated, persist to real backend API
+    if (authToken) {
+      try {
+        const payload = {
+          name: newHostData.name,
+          runtimeId: newHostData.runtimeId || newHostData.runtime,
+          runtimeVersion: newHostData.runtimeVersion || (newHostData.version ? newHostData.version.split(' ')[1] : '20'),
+          planId: newHostData.planId || newHostData.plan.id,
+          region: newHostData.region,
+        };
+
+        const res = await fetch('/api/v1/hosts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const json = await res.json();
+        if (json.success && json.data?.host) {
+          const h = json.data.host;
+          const planRamMb = h.ramLimitMb || newHostData.ramTotal;
+          const planDiskGb = h.diskLimitGb || newHostData.diskTotal;
+          const planCpu = h.cpuLimit ? `${h.cpuLimit} vCPU` : (newHostData.plan?.cpu || '1 vCPU');
+
+          const newHost: Host = {
+            ...newHostData,
+            id: `host-${h.id}`,
+            numericId: h.id,
+            status: 'PENDING',
+            plan: {
+              ...newHostData.plan,
+              cpu: planCpu,
+              ram: `${Math.round(planRamMb / 1024)} GB`,
+              disk: `${planDiskGb} GB NVMe`,
+              cpuCores: h.cpuLimit,
+              ramMb: planRamMb,
+              diskMb: planDiskGb * 1024,
+            },
+            nodeId: h.nodeId,
+            userId: h.userId,
+            createdAt: h.createdAt,
+            uptime: 'Chưa khả dụng (Pending)',
+            uptimeSeconds: 0,
+            cpuUsage: 0,
+            ramUsage: 0,
+            diskUsage: 0,
+            ramTotal: planRamMb,
+            diskTotal: planDiskGb,
+            cpuLimit: h.cpuLimit,
+            memoryLimit: planRamMb,
+            diskLimit: planDiskGb,
+          };
+
+          setHosts((prev) => [newHost, ...prev]);
+          initHostDefaults(newHost.id, newHost);
+
+          showToast({
+            title: 'Đã khởi tạo máy chủ',
+            message: `Máy chủ "${newHost.name}" đã được ghi nhận với trạng thái Chờ cấp phát (Pending).`,
+            type: 'success',
+          });
+
+          return newHost;
+        } else {
+          throw new Error(json.error?.message || 'Không thể tạo máy chủ trên hệ thống');
+        }
+      } catch (err: any) {
+        showToast({
+          title: 'Lỗi tạo máy chủ',
+          message: err.message || 'Lỗi kết nối tới máy chủ',
+          type: 'error',
+        });
+        throw err;
+      }
+    }
+
+    // Fallback local mode (offline or unauthenticated)
+    const newId = `host-${Date.now()}`;
+    const newHost: Host = {
+      ...newHostData,
+      id: newId,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+      uptime: 'Chưa khả dụng (Pending)',
+      uptimeSeconds: 0,
+      cpuUsage: 0,
+      ramUsage: 0,
+      diskUsage: 0,
+    };
+
+    setHosts((prev) => [newHost, ...prev]);
+    initHostDefaults(newId, newHost);
 
     showToast({
       title: 'Đã khởi tạo máy chủ',
-      message: `Máy chủ "${newHost.name}" đã được cấp phát thành công.`,
+      message: `Máy chủ "${newHost.name}" đã được ghi nhận với trạng thái Chờ cấp phát (Pending).`,
       type: 'success',
     });
 
     return newHost;
   };
 
-  const deleteHost = (id: string) => {
+  const deleteHost = async (id: string): Promise<void> => {
     const target = hosts.find((h) => h.id === id);
+    const numId = (target as any)?.numericId || id.replace('host-', '');
+
+    if (authToken && numId && !isNaN(Number(numId))) {
+      try {
+        const res = await fetch(`/api/v1/hosts/${numId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        const json = await res.json();
+        if (!json.success) {
+          throw new Error(json.error?.message || 'Không thể xóa máy chủ trên hệ thống');
+        }
+      } catch (err: any) {
+        showToast({
+          title: 'Lỗi xóa máy chủ',
+          message: err.message || 'Lỗi kết nối API',
+          type: 'error',
+        });
+        return;
+      }
+    }
+
     setHosts((prev) => prev.filter((h) => h.id !== id));
     showToast({
       title: 'Đã xóa máy chủ',
@@ -587,6 +804,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     localStorage.setItem('aston_auth_token', token);
     setAuthToken(token);
     setIsAuthenticated(true);
+    fetchBackendHosts(token);
     if (user) {
       setUserProfile((prev) => ({
         ...prev,
@@ -744,6 +962,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         restartHost,
         createHost,
         deleteHost,
+        refreshHosts,
         files,
         saveFileContent,
         createFile,

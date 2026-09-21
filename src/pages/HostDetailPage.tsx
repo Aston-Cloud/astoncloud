@@ -183,15 +183,21 @@ export const HostDetailPage: React.FC<HostDetailPageProps> = ({
         >
           <div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>TẢI CPU</div>
-            <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>{host.cpuUsage}%</div>
+            <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>
+              {host.status === 'PENDING' ? 'Chờ cấp phát' : `${host.cpuUsage}%`}
+            </div>
           </div>
           <div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>BỘ NHỚ RAM</div>
-            <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>{host.ramUsage} MB</div>
+            <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>
+              {host.status === 'PENDING' ? `Định mức ${host.ramTotal} MB` : `${host.ramUsage} MB`}
+            </div>
           </div>
           <div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>Ổ CỨNG NVME</div>
-            <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>{host.diskUsage} GB</div>
+            <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>
+              {host.status === 'PENDING' ? `Định mức ${host.diskTotal} GB` : `${host.diskUsage} GB`}
+            </div>
           </div>
           <div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>THỜI GIAN CHẠY</div>

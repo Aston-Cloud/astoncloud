@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Server,
   Zap,
@@ -27,7 +27,8 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
   const { createHost, setCurrentHostId } = useAppState();
 
   const [runtime, setRuntime] = useState<RuntimeType>('nodejs');
-  const [version, setVersion] = useState<string>('Node.js 20 LTS');
+  const [version, setVersion] = useState<string>('20');
+  const [plans, setPlans] = useState<HostingPlan[]>(INITIAL_PLANS);
   const [selectedPlan, setSelectedPlan] = useState<HostingPlan>(INITIAL_PLANS[1]);
   const [hostName, setHostName] = useState<string>('');
   const [region, setRegion] = useState<string>('Singapore (ap-southeast-1)');
@@ -37,29 +38,78 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
-  const runtimeOptions: { id: RuntimeType; name: string; tag: string; description: string; versions: string[] }[] = [
+  const [runtimeOptions, setRuntimeOptions] = useState<{ id: RuntimeType; name: string; tag: string; description: string; versions: string[] }[]>([
     {
       id: 'nodejs',
       name: 'Node.js',
       tag: 'Tiêu chuẩn Doanh nghiệp',
       description: 'Môi trường JavaScript hướng sự kiện bất đồng bộ được thiết kế tối ưu cho các ứng dụng mạng có khả năng mở rộng cao.',
-      versions: ['Node.js 22 Hiện hành', 'Node.js 20 LTS (Khuyên dùng)', 'Node.js 18 LTS'],
+      versions: ['20', '22', '24'],
     },
     {
       id: 'bun',
       name: 'Bun',
       tag: 'Tốc độ Siêu tốc',
       description: 'Môi trường runtime và bộ công cụ JavaScript tích hợp all-in-one tối ưu tốc độ vượt trội, hỗ trợ gốc TypeScript và JSX.',
-      versions: ['Bun 1.2.2 (Ổn định Mới nhất)', 'Bun 1.1.38', 'Bun 1.0.35'],
+      versions: ['latest', 'stable'],
     },
     {
       id: 'python',
       name: 'Python',
       tag: 'AI & Khoa học Dữ liệu',
       description: 'Môi trường Python hiệu năng cao được tinh chỉnh chuyên biệt cho FastAPI, Flask, Django và các dịch vụ vi mô Machine Learning.',
-      versions: ['Python 3.12 (Khuyên dùng)', 'Python 3.13 Hiện hành', 'Python 3.11', 'Python 3.10 LTS'],
+      versions: ['3.12', '3.11', '3.13'],
     },
-  ];
+  ]);
+
+  // Load backend plans and runtimes
+  useEffect(() => {
+    fetch('/api/v1/plans')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data?.plans) && data.data.plans.length > 0) {
+          const fetchedPlans: HostingPlan[] = data.data.plans.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            price: p.price || p.priceMonthly,
+            priceMonthly: p.priceMonthly,
+            cpu: p.cpu || `${p.cpuCores} vCPU`,
+            cpuCores: p.cpuCores,
+            ram: p.ram || `${Math.round(p.ramMb / 1024)} GB`,
+            ramMb: p.ramMb,
+            disk: p.disk || `${Math.round(p.diskMb / 1024)} GB NVMe`,
+            diskMb: p.diskMb,
+            bandwidth: p.bandwidth || '1 TB',
+            recommended: p.recommended || p.id === 'developer',
+          }));
+          setPlans(fetchedPlans);
+          const devPlan = fetchedPlans.find((p) => p.id === 'developer') || fetchedPlans[0];
+          setSelectedPlan(devPlan);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/v1/runtimes')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data?.runtimes) && data.data.runtimes.length > 0) {
+          const apiRuntimes = data.data.runtimes;
+          setRuntimeOptions((prev) =>
+            prev.map((opt) => {
+              const matched = apiRuntimes.find((ar: any) => ar.id === opt.id);
+              if (matched && Array.isArray(matched.versions) && matched.versions.length > 0) {
+                return {
+                  ...opt,
+                  versions: matched.versions,
+                };
+              }
+              return opt;
+            })
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const regionOptions = [
     { value: 'Singapore (ap-southeast-1)', label: '🇸🇬 Singapore (ap-southeast-1) - Độ trễ thấp', flag: '🇸🇬' },
@@ -71,7 +121,7 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
   const handleRuntimeSelect = (r: RuntimeType) => {
     setRuntime(r);
     const chosen = runtimeOptions.find((ro) => ro.id === r);
-    if (chosen) {
+    if (chosen && chosen.versions.length > 0) {
       setVersion(chosen.versions[0]);
     }
   };
@@ -83,7 +133,7 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
     if (found) setRegionFlag(found.flag);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!hostName.trim()) {
@@ -98,31 +148,42 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
     setError('');
     setIsSubmitting(true);
 
-    setTimeout(() => {
+    try {
       const generatedIp = `128.${Math.floor(Math.random() * 100 + 100)}.${Math.floor(Math.random() * 200 + 10)}.${Math.floor(Math.random() * 200 + 10)}`;
       const generatedPort = runtime === 'python' ? 8000 : runtime === 'bun' ? 8080 : 3000;
+      const cleanVersion = version.replace(/^(Node\.js|Bun|Python)\s*/i, '').split(' ')[0].trim();
 
-      const newHost = createHost({
+      const newHost = await createHost({
         name: hostName.trim().toLowerCase(),
         slug: hostName.trim().toLowerCase(),
         runtime,
-        version,
-        status: 'online',
+        runtimeId: runtime,
+        version: `${runtime === 'python' ? 'Python' : runtime === 'bun' ? 'Bun' : 'Node.js'} ${cleanVersion}`,
+        runtimeVersion: cleanVersion,
+        status: 'PENDING',
         plan: selectedPlan,
+        planId: selectedPlan.id,
         region,
         regionFlag,
         ipAddress: generatedIp,
         port: generatedPort,
-        ramTotal: parseInt(selectedPlan.ram) * 1024,
-        diskTotal: parseInt(selectedPlan.disk),
+        ramTotal: selectedPlan.ramMb || parseInt(selectedPlan.ram) * 1024,
+        diskTotal: selectedPlan.diskMb ? Math.round(selectedPlan.diskMb / 1024) : parseInt(selectedPlan.disk),
         autoRestart,
         repoUrl: repoUrl.trim() || undefined,
       });
 
       setIsSubmitting(false);
-      setCurrentHostId(newHost.id);
-      onNavigate(`host-${newHost.id}`);
-    }, 1200);
+      if (newHost && newHost.id) {
+        setCurrentHostId(newHost.id);
+        onNavigate(`host-${newHost.id}`);
+      } else {
+        onNavigate('hosts');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Có lỗi xảy ra khi khởi tạo máy chủ.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -307,7 +368,7 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-            {INITIAL_PLANS.map((plan) => {
+            {plans.map((plan) => {
               const isSelected = selectedPlan.id === plan.id;
               return (
                 <div
@@ -354,8 +415,8 @@ export const CreateHostPage: React.FC<CreateHostPageProps> = ({ onNavigate }) =>
                       {plan.name}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', marginBottom: '14px' }}>
-                      <span style={{ fontSize: '1.6rem', fontWeight: 800, color: isSelected ? 'var(--accent-pink)' : 'var(--text-main)' }}>
-                        ${plan.price}
+                      <span style={{ fontSize: '1.35rem', fontWeight: 800, color: isSelected ? 'var(--accent-pink)' : 'var(--text-main)' }}>
+                        {plan.price > 1000 ? `${plan.price.toLocaleString('vi-VN')} đ` : `$${plan.price}`}
                       </span>
                       <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>/ tháng</span>
                     </div>
