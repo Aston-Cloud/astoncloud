@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Production Build
+dist/
+dist-ssr/
+
+# Local Environment
+.env.local
+.env.*.local
+
+# Editor & System
+.DS_Store
+*.suo
+.agents/
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.tsbuildinfo
+
+# Playwright artifacts
+.playwright-mcp/
+*.png
