@@ -7,7 +7,12 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server:dev": "npm --prefix server run dev",
+    "server:build": "npm --prefix server run build",
+    "server:typecheck": "npm --prefix server run typecheck",
+    "server:test": "npm --prefix server run test",
+    "server:migrate": "npm --prefix server run migrate"
   },
   "dependencies": {
     "lucide-react": "^1.47.0",
