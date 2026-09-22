@@ -11,7 +11,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "migrate": "tsx src/db/migrate.ts",
-    "test": "vitest run"
+    "test": "vitest run --fileParallelism=false"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

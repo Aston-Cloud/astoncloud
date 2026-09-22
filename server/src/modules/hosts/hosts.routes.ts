@@ -18,6 +18,8 @@ import {
   updateEnvVariableSchema,
   envVariableParamsSchema,
 } from './hosts.schema.js';
+import { DomainsController } from '../domains/domains.controller.js';
+import { createDomainSchema, domainParamsSchema } from '../domains/domains.schema.js';
 
 export const hostsRouter = Router();
 
@@ -106,4 +108,54 @@ hostsRouter.delete(
   validate({ params: envVariableParamsSchema }),
   HostsController.deleteVariable
 );
+
+// ==========================================
+// HOST CUSTOM DOMAINS & SSL ROUTES (MILESTONE 10)
+// ==========================================
+
+// GET /api/v1/hosts/:id/domains - List host domains
+hostsRouter.get('/:id/domains', DomainsController.listHostDomains);
+
+// POST /api/v1/hosts/:id/domains - Add custom domain
+hostsRouter.post(
+  '/:id/domains',
+  validate({ body: createDomainSchema }),
+  DomainsController.addHostDomain
+);
+
+// GET /api/v1/hosts/:id/domains/:domainId - Get domain detail and DNS instructions
+hostsRouter.get(
+  '/:id/domains/:domainId',
+  validate({ params: domainParamsSchema }),
+  DomainsController.getHostDomain
+);
+
+// POST /api/v1/hosts/:id/domains/:domainId/verify - Verify domain DNS ownership
+hostsRouter.post(
+  '/:id/domains/:domainId/verify',
+  validate({ params: domainParamsSchema }),
+  DomainsController.verifyHostDomain
+);
+
+// POST /api/v1/hosts/:id/domains/:domainId/ssl - Request/enable SSL certificate
+hostsRouter.post(
+  '/:id/domains/:domainId/ssl',
+  validate({ params: domainParamsSchema }),
+  DomainsController.requestHostDomainSsl
+);
+
+// DELETE /api/v1/hosts/:id/domains/:domainId/ssl - Disable SSL certificate
+hostsRouter.delete(
+  '/:id/domains/:domainId/ssl',
+  validate({ params: domainParamsSchema }),
+  DomainsController.disableHostDomainSsl
+);
+
+// DELETE /api/v1/hosts/:id/domains/:domainId - Delete custom domain
+hostsRouter.delete(
+  '/:id/domains/:domainId',
+  validate({ params: domainParamsSchema }),
+  DomainsController.deleteHostDomain
+);
+
 

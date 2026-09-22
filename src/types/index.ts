@@ -91,22 +91,33 @@ export interface HostEnvVariable {
   updatedAt: string;
 }
 
-export interface DomainRecord {
-  id: string;
-  domain: string;
-  hostId: string;
-  hostName: string;
-  status: 'active' | 'verifying' | 'dns_pending' | 'failed';
-  sslStatus: 'active' | 'provisioning' | 'expired';
-  targetPort: number;
-  dnsRecords: {
-    type: 'A' | 'CNAME' | 'TXT';
-    name: string;
-    value: string;
-    status: 'configured' | 'pending';
-  }[];
-  createdAt: string;
+export interface DnsRecordInstruction {
+  type: 'A' | 'CNAME' | 'TXT';
+  name: string;
+  value: string;
+  instruction?: string;
+  status?: 'configured' | 'pending';
 }
+
+export interface HostDomain {
+  id: string;
+  hostId: string;
+  hostName?: string;
+  domain: string;
+  status: 'PENDING' | 'VERIFYING' | 'ACTIVE' | 'ERROR' | 'REMOVING' | 'active' | 'verifying' | 'dns_pending' | 'failed';
+  sslStatus: 'NOT_REQUESTED' | 'PENDING' | 'ACTIVE' | 'ERROR' | 'EXPIRED' | 'active' | 'provisioning' | 'expired';
+  verificationMethod?: 'DNS_TXT' | 'DNS_CNAME';
+  verificationToken?: string;
+  targetPort: number;
+  errorMessage?: string | null;
+  verifiedAt?: string | null;
+  dnsRecords: DnsRecordInstruction[];
+  isMock?: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export type DomainRecord = HostDomain;
 
 export interface BackupItem {
   id: string;

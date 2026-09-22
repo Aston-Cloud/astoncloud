@@ -86,6 +86,22 @@ export interface MemoryHostEnvVariable {
   updated_at: Date;
 }
 
+export interface MemoryHostDomain {
+  id: string;
+  host_id: string;
+  user_id?: string | null;
+  domain: string;
+  status: 'PENDING' | 'VERIFYING' | 'ACTIVE' | 'ERROR' | 'REMOVING';
+  ssl_status: 'NOT_REQUESTED' | 'PENDING' | 'ACTIVE' | 'ERROR' | 'EXPIRED';
+  verification_method: 'DNS_TXT' | 'DNS_CNAME';
+  verification_token: string;
+  target_port: number;
+  error_message?: string | null;
+  verified_at?: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface MemoryUser {
   id: string;
   email: string;
@@ -275,6 +291,7 @@ class MemoryStore {
 
   public hosts: MemoryHost[] = [];
   public hostEnvVariables: MemoryHostEnvVariable[] = [];
+  public hostDomains: MemoryHostDomain[] = [];
 }
 
 export const memoryStore = new MemoryStore();
@@ -816,6 +833,8 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     memoryStore.hosts = memoryStore.hosts.filter((h) => h.id !== hostId);
     // Cascade delete related host environment variables
     memoryStore.hostEnvVariables = memoryStore.hostEnvVariables.filter((v) => v.host_id !== hostId);
+    // Cascade delete related host domains
+    memoryStore.hostDomains = memoryStore.hostDomains.filter((d) => d.host_id !== hostId);
     const deleted = prevLen > memoryStore.hosts.length;
     return {
       command: 'DELETE',
@@ -1002,6 +1021,238 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     const deletedItem = memoryStore.hostEnvVariables.find((v) => v.id === varId && (!hostId || v.host_id === hostId));
     memoryStore.hostEnvVariables = memoryStore.hostEnvVariables.filter((v) => !(v.id === varId && (!hostId || v.host_id === hostId)));
     const deleted = prevLen > memoryStore.hostEnvVariables.length;
+    return {
+      command: 'DELETE',
+      rowCount: deleted ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (deletedItem ? [deletedItem] : []) as unknown as R[],
+    };
+  }
+
+  // ==========================================
+  // HOST DOMAINS & SSL (MILESTONE 10)
+  // ==========================================
+
+  // 24. SELECT FROM host_domains
+  if (q.startsWith('SELECT') && q.includes('FROM host_domains')) {
+    // 24a. SELECT * FROM host_domains WHERE id = $1 AND host_id = $2
+    if (q.includes('WHERE id = $1 AND host_id = $2')) {
+      const domId = String(params[0]);
+      const hostId = String(params[1]);
+      const item = memoryStore.hostDomains.find((d) => d.id === domId && d.host_id === hostId);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 24b. SELECT * FROM host_domains WHERE domain = $1
+    if (q.includes('WHERE domain = $1')) {
+      const domainName = String(params[0]).trim().toLowerCase();
+      const item = memoryStore.hostDomains.find((d) => d.domain.toLowerCase() === domainName);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 24c. SELECT COUNT(*) as count FROM host_domains WHERE host_id = $1
+    if (q.includes('COUNT(*)') && q.includes('WHERE host_id = $1')) {
+      const hostId = String(params[0]);
+      const count = memoryStore.hostDomains.filter((d) => d.host_id === hostId).length;
+      return {
+        command: 'SELECT',
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+        rows: [{ count }] as unknown as R[],
+      };
+    }
+
+    // 24d. SELECT * FROM host_domains WHERE host_id = $1
+    if (q.includes('WHERE host_id = $1')) {
+      const hostId = String(params[0]);
+      const items = memoryStore.hostDomains
+        .filter((d) => d.host_id === hostId)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return {
+        command: 'SELECT',
+        rowCount: items.length,
+        oid: 0,
+        fields: [],
+        rows: items as unknown as R[],
+      };
+    }
+
+    // 24d. SELECT * FROM host_domains WHERE user_id = $1
+    if (q.includes('WHERE user_id = $1')) {
+      const userId = String(params[0]);
+      const items = memoryStore.hostDomains
+        .filter((d) => d.user_id === userId)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return {
+        command: 'SELECT',
+        rowCount: items.length,
+        oid: 0,
+        fields: [],
+        rows: items as unknown as R[],
+      };
+    }
+
+    // 24e. SELECT * FROM host_domains WHERE id = $1
+    if (q.includes('WHERE id = $1')) {
+      const domId = String(params[0]);
+      const item = memoryStore.hostDomains.find((d) => d.id === domId);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 24f. Default select all host_domains
+    return {
+      command: 'SELECT',
+      rowCount: memoryStore.hostDomains.length,
+      oid: 0,
+      fields: [],
+      rows: memoryStore.hostDomains as unknown as R[],
+    };
+  }
+
+  // 25. INSERT INTO host_domains
+  if (q.startsWith('INSERT INTO host_domains')) {
+    // Determine columns and params:
+    // host_id, user_id, domain, status, ssl_status, verification_method, verification_token, target_port
+    const hostId = String(params[0]);
+    const userId = params[1] !== undefined ? String(params[1]) : null;
+    const domainName = String(params[2]).trim().toLowerCase();
+    const status = (params[3] !== undefined ? String(params[3]) : 'PENDING') as MemoryHostDomain['status'];
+    const sslStatus = (params[4] !== undefined ? String(params[4]) : 'NOT_REQUESTED') as MemoryHostDomain['ssl_status'];
+    const verificationMethod = (params[5] !== undefined ? String(params[5]) : 'DNS_TXT') as MemoryHostDomain['verification_method'];
+    const verificationToken = String(params[6]);
+    const targetPort = params[7] !== undefined ? Number(params[7]) : 80;
+
+    const existing = memoryStore.hostDomains.find(
+      (d) => d.domain.toLowerCase() === domainName
+    );
+    if (existing) {
+      const err: any = new Error(`duplicate key value violates unique constraint "uq_host_domains_domain"`);
+      err.code = '23505';
+      throw err;
+    }
+
+    const newDomain: MemoryHostDomain = {
+      id: `dom-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      host_id: hostId,
+      user_id: userId,
+      domain: domainName,
+      status,
+      ssl_status: sslStatus,
+      verification_method: verificationMethod,
+      verification_token: verificationToken,
+      target_port: targetPort,
+      error_message: null,
+      verified_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.hostDomains.push(newDomain);
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newDomain] as unknown as R[],
+    };
+  }
+
+  // 26. UPDATE host_domains
+  if (q.startsWith('UPDATE host_domains')) {
+    let item: MemoryHostDomain | undefined;
+
+    // Pattern A: UPDATE host_domains SET status = $1, verified_at = $2, error_message = $3, updated_at = NOW() WHERE id = $4 AND host_id = $5 RETURNING *
+    if (q.includes('SET status = $1, verified_at = $2')) {
+      const status = String(params[0]) as MemoryHostDomain['status'];
+      const verifiedAt = params[1] ? new Date(String(params[1])) : null;
+      const errorMsg = params[2] !== undefined && params[2] !== null ? String(params[2]) : null;
+      const domId = String(params[3]);
+      const hostId = String(params[4]);
+
+      item = memoryStore.hostDomains.find((d) => d.id === domId && d.host_id === hostId);
+      if (item) {
+        item.status = status;
+        item.verified_at = verifiedAt;
+        item.error_message = errorMsg;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern B: UPDATE host_domains SET ssl_status = $1, updated_at = NOW() WHERE id = $2 AND host_id = $3 RETURNING *
+    else if (q.includes('SET ssl_status = $1')) {
+      const sslStatus = String(params[0]) as MemoryHostDomain['ssl_status'];
+      const domId = String(params[1]);
+      const hostId = String(params[2]);
+
+      item = memoryStore.hostDomains.find((d) => d.id === domId && d.host_id === hostId);
+      if (item) {
+        item.ssl_status = sslStatus;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern C: UPDATE host_domains SET status = $1, error_message = $2, updated_at = NOW() WHERE id = $3 AND host_id = $4 RETURNING *
+    else if (q.includes('SET status = $1, error_message = $2')) {
+      const status = String(params[0]) as MemoryHostDomain['status'];
+      const errorMsg = params[1] !== undefined && params[1] !== null ? String(params[1]) : null;
+      const domId = String(params[2]);
+      const hostId = String(params[3]);
+
+      item = memoryStore.hostDomains.find((d) => d.id === domId && d.host_id === hostId);
+      if (item) {
+        item.status = status;
+        item.error_message = errorMsg;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern D: UPDATE host_domains SET target_port = $1, updated_at = NOW() WHERE id = $2 AND host_id = $3 RETURNING *
+    else if (q.includes('SET target_port = $1')) {
+      const targetPort = Number(params[0]);
+      const domId = String(params[1]);
+      const hostId = String(params[2]);
+
+      item = memoryStore.hostDomains.find((d) => d.id === domId && d.host_id === hostId);
+      if (item) {
+        item.target_port = targetPort;
+        item.updated_at = new Date();
+      }
+    }
+
+    return {
+      command: 'UPDATE',
+      rowCount: item ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (item ? [item] : []) as unknown as R[],
+    };
+  }
+
+  // 27. DELETE FROM host_domains
+  if (q.startsWith('DELETE FROM host_domains')) {
+    const domId = String(params[0]);
+    const hostId = params[1] !== undefined ? String(params[1]) : undefined;
+    const prevLen = memoryStore.hostDomains.length;
+    const deletedItem = memoryStore.hostDomains.find((d) => d.id === domId && (!hostId || d.host_id === hostId));
+    memoryStore.hostDomains = memoryStore.hostDomains.filter((d) => !(d.id === domId && (!hostId || d.host_id === hostId)));
+    const deleted = prevLen > memoryStore.hostDomains.length;
     return {
       command: 'DELETE',
       rowCount: deleted ? 1 : 0,

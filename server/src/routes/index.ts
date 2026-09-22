@@ -6,6 +6,7 @@ import { plansRouter } from '../modules/plans/plans.routes.js';
 import { runtimesRouter } from '../modules/runtimes/runtimes.routes.js';
 import { nodesRouter } from '../modules/nodes/nodes.routes.js';
 import { hostsRouter } from '../modules/hosts/hosts.routes.js';
+import { domainsRouter } from '../modules/domains/domains.routes.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendSuccess } from '../utils/response.js';
 
@@ -32,7 +33,10 @@ apiRouter.use('/nodes', nodesRouter);
 // 7. Hosting Core: /api/v1/hosts/*
 apiRouter.use('/hosts', hostsRouter);
 
-// 8. Admin preview endpoint (for Admin Authorization & Isolation verification)
+// 8. Custom Domains: /api/v1/domains
+apiRouter.use('/domains', domainsRouter);
+
+// 9. Admin preview endpoint (for Admin Authorization & Isolation verification)
 apiRouter.get('/admin/stats', requireAuth, requireRole('ADMIN'), (_req, res) => {
   sendSuccess(res, {
     system: 'Aston Cloud Admin Panel API',
