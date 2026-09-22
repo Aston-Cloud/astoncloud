@@ -49,6 +49,7 @@ const envSchema = z.object({
   NODE_AGENT_URL: z.string().default('http://127.0.0.1:5001'),
   NODE_AGENT_KEY: z.string().default('aston-agent-secret-key-super-secure-32chars-min'),
   NODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  NODE_HEARTBEAT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(60),
 
   // Domains & SSL Management (Milestone 10)
   MAX_DOMAINS_PER_HOST: z.coerce.number().int().positive().default(5),

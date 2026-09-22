@@ -43,14 +43,21 @@ export interface MemoryNode {
   status: 'ONLINE' | 'OFFLINE' | 'MAINTENANCE' | 'DRAINING';
   total_ram_mb: number;
   available_ram_mb: number;
+  allocated_ram_mb: number;
   total_cpu_cores: number;
   available_cpu_cores: number;
+  allocated_cpu_cores: number;
   total_disk_mb: number;
   available_disk_mb: number;
+  allocated_disk_mb: number;
   agent_url?: string;
   agent_key?: string;
+  agent_version?: string;
+  agent_token_hash?: string;
+  last_heartbeat?: Date;
   is_active: boolean;
   created_at: Date;
+  updated_at?: Date;
 }
 
 export interface MemoryHost {
@@ -324,20 +331,54 @@ class MemoryStore {
 
   public nodes: MemoryNode[] = [
     {
+      id: 'node-vn-01',
+      name: 'Việt Nam Edge 01 (FPT HCM)',
+      hostname: 'vn-node-01.astoncloud.internal',
+      region: 'Vietnam',
+      ip_address: '103.142.12.8',
+      status: 'ONLINE',
+      total_ram_mb: 8192,
+      available_ram_mb: 8192,
+      allocated_ram_mb: 0,
+      total_cpu_cores: 4.0,
+      available_cpu_cores: 4.0,
+      allocated_cpu_cores: 0,
+      total_disk_mb: 51200,
+      available_disk_mb: 51200,
+      allocated_disk_mb: 0,
+      agent_url: 'http://127.0.0.1:5001',
+      agent_key: 'mock_agent_token_vn',
+      agent_version: '1.0.0-mock',
+      agent_token_hash: crypto.createHash('sha256').update('mock_agent_token_vn').digest('hex'),
+      last_heartbeat: new Date(),
+      is_active: true,
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
+    },
+    {
       id: 'node-sg-01',
       name: 'Singapore Edge 01 (AWS ap-southeast-1)',
       hostname: 'sg-node-01.astoncloud.internal',
       region: 'Singapore',
       ip_address: '13.212.45.10',
       status: 'ONLINE',
-      total_ram_mb: 32768,
-      available_ram_mb: 32768,
-      total_cpu_cores: 16.0,
-      available_cpu_cores: 16.0,
-      total_disk_mb: 1048576,
-      available_disk_mb: 1048576,
+      total_ram_mb: 16384,
+      available_ram_mb: 16384,
+      allocated_ram_mb: 0,
+      total_cpu_cores: 8.0,
+      available_cpu_cores: 8.0,
+      allocated_cpu_cores: 0,
+      total_disk_mb: 102400,
+      available_disk_mb: 102400,
+      allocated_disk_mb: 0,
+      agent_url: 'http://127.0.0.1:5002',
+      agent_key: 'mock_agent_token_sg',
+      agent_version: '1.0.0-mock',
+      agent_token_hash: crypto.createHash('sha256').update('mock_agent_token_sg').digest('hex'),
+      last_heartbeat: new Date(),
       is_active: true,
-      created_at: new Date(),
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
     },
     {
       id: 'node-tokyo-01',
@@ -348,28 +389,21 @@ class MemoryStore {
       status: 'ONLINE',
       total_ram_mb: 32768,
       available_ram_mb: 32768,
+      allocated_ram_mb: 0,
       total_cpu_cores: 16.0,
       available_cpu_cores: 16.0,
+      allocated_cpu_cores: 0,
       total_disk_mb: 1048576,
       available_disk_mb: 1048576,
+      allocated_disk_mb: 0,
+      agent_url: 'http://127.0.0.1:5003',
+      agent_key: 'mock_agent_token_tokyo',
+      agent_version: '1.0.0-mock',
+      agent_token_hash: crypto.createHash('sha256').update('mock_agent_token_tokyo').digest('hex'),
+      last_heartbeat: new Date(),
       is_active: true,
-      created_at: new Date(),
-    },
-    {
-      id: 'node-vn-01',
-      name: 'Việt Nam Edge 01 (FPT HCM)',
-      hostname: 'vn-node-01.astoncloud.internal',
-      region: 'Vietnam',
-      ip_address: '103.142.12.8',
-      status: 'ONLINE',
-      total_ram_mb: 32768,
-      available_ram_mb: 32768,
-      total_cpu_cores: 16.0,
-      available_cpu_cores: 16.0,
-      total_disk_mb: 1048576,
-      available_disk_mb: 1048576,
-      is_active: true,
-      created_at: new Date(),
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
     },
   ];
 
@@ -643,6 +677,47 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
 
   // 14. Query hosting_nodes
   if (q.includes('FROM hosting_nodes')) {
+    // Query node by agent_token_hash
+    if (params.length > 0 && q.includes('agent_token_hash = $1')) {
+      const hash = String(params[0]);
+      const match = memoryStore.nodes.find((n) => n.agent_token_hash === hash && n.is_active);
+      return {
+        command: 'SELECT',
+        rowCount: match ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (match ? [match] : []) as unknown as R[],
+      };
+    }
+
+    // Query node by agent_key or ID
+    if (params.length > 0 && q.includes('agent_key = $1')) {
+      const keyOrId = String(params[0]);
+      const match = memoryStore.nodes.find(
+        (n) => (n.agent_key === keyOrId || n.id === keyOrId) && n.is_active
+      );
+      return {
+        command: 'SELECT',
+        rowCount: match ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (match ? [match] : []) as unknown as R[],
+      };
+    }
+
+    // Query node by hostname
+    if (params.length > 0 && q.includes('hostname = $1')) {
+      const host = String(params[0]);
+      const match = memoryStore.nodes.find((n) => n.hostname === host && n.is_active);
+      return {
+        command: 'SELECT',
+        rowCount: match ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (match ? [match] : []) as unknown as R[],
+      };
+    }
+
     // 14a. Scheduler query checking available resources
     if (q.includes('available_cpu_cores >= $1') || q.includes('available_ram_mb >=')) {
       const cpu = Number(params[0]);
@@ -680,7 +755,19 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       };
     }
 
-    // 14b. Region search query
+    // 14c. Online nodes only
+    if (q.includes("status = 'ONLINE'") && !q.includes('available_cpu_cores')) {
+      const onlineNodes = memoryStore.nodes.filter((n) => n.status === 'ONLINE' && n.is_active);
+      return {
+        command: 'SELECT',
+        rowCount: onlineNodes.length,
+        oid: 0,
+        fields: [],
+        rows: onlineNodes as unknown as R[],
+      };
+    }
+
+    // 14d. Region search query
     if (params.length > 0 && (q.includes('ILIKE') || q.includes('region'))) {
       const region = String(params[0]).replace(/%/g, '').toLowerCase().trim();
       const match =
@@ -712,8 +799,78 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     };
   }
 
-  // 14b. UPDATE hosting_nodes (Atomic reservation & resource release)
+  // 14b. INSERT INTO hosting_nodes
+  if (q.startsWith('INSERT INTO hosting_nodes')) {
+    const rawId = String(params[0]);
+    const name = String(params[1]);
+    const hostname = String(params[2]);
+    const region = String(params[3]);
+    const ip = String(params[4]);
+    const totalCpu = Number(params[5]);
+    const totalRam = Number(params[6]);
+    const totalDisk = Number(params[7]);
+    const agentUrl = String(params[8] || 'http://127.0.0.1:5001');
+    const agentTokenHash = String(params[9] || '');
+
+    const newNode: MemoryNode = {
+      id: rawId,
+      name,
+      hostname,
+      region,
+      ip_address: ip,
+      status: 'ONLINE',
+      total_cpu_cores: totalCpu,
+      available_cpu_cores: totalCpu,
+      allocated_cpu_cores: 0,
+      total_ram_mb: totalRam,
+      available_ram_mb: totalRam,
+      allocated_ram_mb: 0,
+      total_disk_mb: totalDisk,
+      available_disk_mb: totalDisk,
+      allocated_disk_mb: 0,
+      agent_url: agentUrl,
+      agent_version: '1.0.0-mock',
+      agent_token_hash: agentTokenHash,
+      last_heartbeat: new Date(),
+      is_active: true,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.nodes.push(newNode);
+
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newNode] as unknown as R[],
+    };
+  }
+
+  // 14c. UPDATE hosting_nodes (Heartbeat, status, atomic reservation & resource release)
   if (q.startsWith('UPDATE hosting_nodes')) {
+    // Heartbeat update: SET last_heartbeat = NOW(), status = $1, agent_version = $2 ... WHERE id = $3
+    if (q.includes('last_heartbeat = NOW()')) {
+      const status = String(params[0]) as MemoryNode['status'];
+      const agentVer = String(params[1] || '1.0.0-mock');
+      const nodeId = String(params[2]);
+      const node = memoryStore.nodes.find((n) => n.id === nodeId);
+      if (node) {
+        node.status = status;
+        node.agent_version = agentVer;
+        node.last_heartbeat = new Date();
+        node.updated_at = new Date();
+      }
+      return {
+        command: 'UPDATE',
+        rowCount: node ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (node ? [node] : []) as unknown as R[],
+      };
+    }
+
     // Check if reservation (subtraction)
     if (q.includes('available_cpu_cores - $1') || q.includes('available_cpu_cores = available_cpu_cores -')) {
       const cpu = Number(params[0]);
@@ -735,8 +892,12 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       }
 
       node.available_cpu_cores = Number((node.available_cpu_cores - cpu).toFixed(2));
+      node.allocated_cpu_cores = Number((node.allocated_cpu_cores + cpu).toFixed(2));
       node.available_ram_mb -= ram;
+      node.allocated_ram_mb += ram;
       node.available_disk_mb -= disk;
+      node.allocated_disk_mb += disk;
+      node.updated_at = new Date();
 
       return {
         command: 'UPDATE',
@@ -760,10 +921,50 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
           node.total_cpu_cores,
           Number((node.available_cpu_cores + cpu).toFixed(2))
         );
+        node.allocated_cpu_cores = Math.max(0, Number((node.allocated_cpu_cores - cpu).toFixed(2)));
         node.available_ram_mb = Math.min(node.total_ram_mb, node.available_ram_mb + ram);
+        node.allocated_ram_mb = Math.max(0, node.allocated_ram_mb - ram);
         node.available_disk_mb = Math.min(node.total_disk_mb, node.available_disk_mb + disk);
+        node.allocated_disk_mb = Math.max(0, node.allocated_disk_mb - disk);
+        node.updated_at = new Date();
       }
 
+      return {
+        command: 'UPDATE',
+        rowCount: node ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (node ? [node] : []) as unknown as R[],
+      };
+    }
+
+    // Timeout offline update: SET status = 'OFFLINE', updated_at = NOW() WHERE id = $1 AND status = 'ONLINE'
+    if (q.includes("SET status = 'OFFLINE'")) {
+      const nodeId = String(params[0]);
+      const node = memoryStore.nodes.find((n) => n.id === nodeId);
+      if (node && (node.status === 'ONLINE' || !q.includes("status = 'ONLINE'"))) {
+        node.status = 'OFFLINE';
+        node.updated_at = new Date();
+        return {
+          command: 'UPDATE',
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+          rows: [node] as unknown as R[],
+        };
+      }
+      return { command: 'UPDATE', rowCount: 0, oid: 0, fields: [], rows: [] };
+    }
+
+    // General status update: SET status = $1, updated_at = NOW() WHERE id = $2
+    if (q.includes('SET status = $1') || (q.includes('status = $1') && q.includes('WHERE id = $2'))) {
+      const status = String(params[0]) as MemoryNode['status'];
+      const nodeId = String(params[1]);
+      const node = memoryStore.nodes.find((n) => n.id === nodeId);
+      if (node) {
+        node.status = status;
+        node.updated_at = new Date();
+      }
       return {
         command: 'UPDATE',
         rowCount: node ? 1 : 0,

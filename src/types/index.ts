@@ -330,19 +330,35 @@ export interface AdminUser {
 export interface AdminNode {
   id: string;
   name: string;
+  hostname?: string;
   ipAddress: string;
   region: string;
   status: 'ONLINE' | 'OFFLINE' | 'MAINTENANCE' | 'DRAINING' | string;
-  cpuTotalCores: number;
-  cpuUsedCores: number;
-  ramTotalMb: number;
-  ramUsedMb: number;
-  diskTotalGb: number;
-  diskUsedGb: number;
+  totalCpu: number;
+  availableCpu: number;
+  allocatedCpu: number;
+  totalRam: number;
+  availableRam: number;
+  allocatedRam: number;
+  totalDisk: number;
+  availableDisk: number;
+  allocatedDisk: number;
   hostCount: number;
   isMock: boolean;
+  mockNotice?: string;
+  agentUrl?: string;
   agentVersion: string;
-  lastHeartbeatAt: string;
+  lastHeartbeat: string | null;
+  createdAt?: string;
+
+  // Backward compatibility fields
+  cpuTotalCores?: number;
+  cpuUsedCores?: number;
+  ramTotalMb?: number;
+  ramUsedMb?: number;
+  diskTotalGb?: number;
+  diskUsedGb?: number;
+  lastHeartbeatAt?: string;
 }
 
 export interface AdminAuditLog {

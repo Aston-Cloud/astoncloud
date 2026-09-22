@@ -2,6 +2,8 @@ import { query } from '../../db/index.js';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
 import { HostsService } from '../hosts/hosts.service.js';
+import { NodesService, formatNode, NodeStatus, NodeRow } from '../nodes/nodes.service.js';
+import type { RegisterNodeInput } from '../nodes/nodes.schema.js';
 import type {
   UserListQuery,
   UpdateUserStatusInput,
@@ -447,62 +449,42 @@ export class AdminService {
   // ============================================================================
 
   public static async listAllNodes() {
-    const nodesRes = await query('SELECT * FROM hosting_nodes ORDER BY region ASC');
+    await NodesService.checkHeartbeatTimeouts();
+
+    const nodesRes = await query<NodeRow>('SELECT * FROM hosting_nodes ORDER BY region ASC');
 
     const result = [];
     for (const node of nodesRes.rows) {
       const hostCountRes = await query(
-        'SELECT COUNT(*) FROM hosts WHERE node_id = $1',
+        'SELECT COUNT(*) FROM hosts WHERE node_id = $1 AND status != \'DELETING\'',
         [node.id]
       );
       const hostCount = parseInt(hostCountRes.rows[0]?.count || '0', 10);
-
-      result.push({
-        id: node.id,
-        name: node.name,
-        hostname: node.hostname,
-        region: node.region,
-        status: node.status,
-        totalCpu: Number(node.total_cpu_cores),
-        availableCpu: Number(node.available_cpu_cores),
-        totalRam: Number(node.total_ram_mb),
-        availableRam: Number(node.available_ram_mb),
-        totalDisk: Number(node.total_disk_mb),
-        availableDisk: Number(node.available_disk_mb),
-        hostCount,
-        isMock: true,
-        mockNotice: 'Mock Infrastructure (Phát triển cục bộ, không yêu cầu VPS vật lý)',
-      });
+      result.push(formatNode(node, hostCount));
     }
 
     return result;
   }
 
-  public static async updateNodeStatus(
-    nodeId: string,
-    status: 'ONLINE' | 'OFFLINE' | 'MAINTENANCE' | 'DRAINING',
+  public static async getNodeDetails(nodeId: string) {
+    return NodesService.getNodeDetails(nodeId);
+  }
+
+  public static async registerNode(
+    input: RegisterNodeInput,
     adminUser: { id: string; email: string },
     ip?: string
   ) {
-    const nodeRes = await query('SELECT * FROM hosting_nodes WHERE id = $1 LIMIT 1', [nodeId]);
-    if (!nodeRes.rows.length) {
-      throw new NotFoundError('Không tìm thấy cụm máy chủ (Node)');
-    }
-    const node = nodeRes.rows[0];
+    return NodesService.registerNode(input, adminUser, ip);
+  }
 
-    await query('UPDATE hosting_nodes SET status = $1 WHERE id = $2', [status, nodeId]);
-
-    await this.recordAuditLog({
-      actorId: adminUser.id,
-      actorEmail: adminUser.email,
-      action: 'ADMIN_NODE_STATUS_UPDATED',
-      targetType: 'NODE',
-      targetId: nodeId,
-      details: { nodeName: node.name, previousStatus: node.status, newStatus: status },
-      ipAddress: ip,
-    });
-
-    return { ...node, status };
+  public static async updateNodeStatus(
+    nodeId: string,
+    status: NodeStatus,
+    adminUser: { id: string; email: string },
+    ip?: string
+  ) {
+    return NodesService.updateNodeStatus(nodeId, status, adminUser, ip);
   }
 
   // ============================================================================

@@ -21,6 +21,7 @@ import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { AdminHostsPage } from './pages/admin/AdminHostsPage';
 import { AdminNodesPage } from './pages/admin/AdminNodesPage';
+import { AdminNodeDetailPage } from './pages/admin/AdminNodeDetailPage';
 import { AdminPlansPage } from './pages/admin/AdminPlansPage';
 import { AdminSubscriptionsPage } from './pages/admin/AdminSubscriptionsPage';
 import { AdminInvoicesPage } from './pages/admin/AdminInvoicesPage';
@@ -205,7 +206,11 @@ export function AppContent() {
       return <AdminHostsPage />;
     }
     if (normalizedRoute === 'admin-nodes') {
-      return <AdminNodesPage />;
+      return <AdminNodesPage onNavigate={navigateTo} />;
+    }
+    if (normalizedRoute.startsWith('admin-node-')) {
+      const nodeId = normalizedRoute.replace(/^admin-node-/, '');
+      return <AdminNodeDetailPage nodeId={nodeId} onNavigate={navigateTo} />;
     }
     if (normalizedRoute === 'admin-plans') {
       return <AdminPlansPage />;

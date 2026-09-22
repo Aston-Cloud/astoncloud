@@ -14,6 +14,7 @@ import {
   activityQuerySchema,
   updateSettingsSchema,
 } from './admin.schema.js';
+import { RegisterNodeSchema } from '../nodes/nodes.schema.js';
 
 export class AdminController {
   public static async getDashboardStats(_req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -98,6 +99,35 @@ export class AdminController {
     try {
       const nodes = await AdminService.listAllNodes();
       sendSuccess(res, nodes);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async getNodeDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const nodeId = String(req.params.nodeId);
+      const details = await AdminService.getNodeDetails(nodeId);
+      sendSuccess(res, details);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async registerNode(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const input = RegisterNodeSchema.parse(req.body);
+      const admin = { id: req.user!.id, email: req.user!.email };
+      const result = await AdminService.registerNode(input, admin, req.ip);
+      sendSuccess(
+        res,
+        {
+          message: 'Đăng ký Node Agent thành công. Hãy lưu lại token xác thực vì token này chỉ hiển thị một lần duy nhất.',
+          node: result.node,
+          agentToken: result.agentToken,
+        },
+        201
+      );
     } catch (err) {
       next(err);
     }

@@ -240,12 +240,18 @@ export class HostsService {
   }
 
   /**
-   * Helper to retrieve NodeContext from node ID
+   * Helper to retrieve NodeContext from node ID with offline failure guard
    */
-  private static async getNodeContext(nodeId: string): Promise<NodeContext> {
+  private static async getNodeContext(nodeId: string, allowOffline = false): Promise<NodeContext> {
     const node = await NodesService.getNodeById(nodeId);
     if (!node) {
       throw new AppError(`Không tìm thấy node cụm "${nodeId}"`, 500);
+    }
+    if (!allowOffline && node.status === 'OFFLINE') {
+      throw new AppError(
+        `Máy chủ cụm (Node "${node.name}") hiện đang ngoại tuyến (OFFLINE). Các tác vụ điều khiển hạ tầng tạm thời không khả dụng.`,
+        503
+      );
     }
     return {
       id: node.id,
@@ -714,7 +720,7 @@ export class HostsService {
     // 2. Remove container from Node Agent if assigned
     if (host.nodeId && host.containerId) {
       try {
-        const nodeContext = await this.getNodeContext(host.nodeId);
+        const nodeContext = await this.getNodeContext(host.nodeId, true);
         const agentClient = getNodeAgentClient();
         await agentClient.deleteContainer(nodeContext, host.containerId, true);
       } catch (err: any) {
@@ -750,6 +756,34 @@ export class HostsService {
       memoryLimit: host.memoryLimit || 512,
       diskLimit: host.diskLimit || 5120,
     };
+
+    // 0. Check if assigned host node is OFFLINE
+    if (host.nodeId) {
+      try {
+        await this.getNodeContext(host.nodeId);
+      } catch (err: any) {
+        if (err.statusCode === 503 || err.message?.includes('OFFLINE')) {
+          return {
+            id: host.id,
+            hostId: host.id,
+            status: host.status,
+            available: false,
+            cpu: { usage: 0, limit: defaultLimits.cpuLimit },
+            memory: { usage: 0, limit: defaultLimits.memoryLimit },
+            disk: { usage: 0, limit: defaultLimits.diskLimit },
+            network: { rx: 0, tx: 0 },
+            uptime: 0,
+            uptimeFormatted: '0m',
+            timestamp: nowIso,
+            cpuPercent: 0,
+            memoryUsageMb: 0,
+            memoryLimitMb: defaultLimits.memoryLimit,
+            pids: 0,
+            error: 'Máy chủ cụm (Node) hiện đang ngoại tuyến',
+          };
+        }
+      }
+    }
 
     // 1. Handling non-running states: PROVISIONING, PENDING, ERROR, DELETING
     if (host.status === 'PROVISIONING' || host.status === 'PENDING') {
@@ -913,6 +947,27 @@ export class HostsService {
   ) {
     const host = await this.getHostById(hostId, userId, role);
 
+    // 0. Check if assigned host node is OFFLINE
+    if (host.nodeId) {
+      try {
+        await this.getNodeContext(host.nodeId);
+      } catch (err: any) {
+        if (err.statusCode === 503 || err.message?.includes('OFFLINE')) {
+          const entries = [
+            {
+              timestamp: new Date().toISOString(),
+              level: 'warn' as const,
+              message: `[CẢNH BÁO HẠ TẦNG] Máy chủ cụm (Node) hiện đang ngoại tuyến (OFFLINE). Không thể kết nối lấy nhật ký thời gian thực.`,
+            },
+          ];
+          return {
+            id: host.id,
+            ...this.filterAndFormatLogEntries(entries, queryOptions),
+          };
+        }
+      }
+    }
+
     // If host is PROVISIONING
     if (host.status === 'PROVISIONING') {
       const createdTs = host.createdAt ? new Date(host.createdAt).toISOString() : new Date().toISOString();
@@ -984,23 +1039,40 @@ export class HostsService {
 
     // If host has containerId and nodeId
     if (host.nodeId && host.containerId) {
-      const nodeContext = await this.getNodeContext(host.nodeId);
-      const agentClient = getNodeAgentClient();
-      const rawResult = await agentClient.getContainerLogs(nodeContext, host.containerId, queryOptions);
+      try {
+        const nodeContext = await this.getNodeContext(host.nodeId);
+        const agentClient = getNodeAgentClient();
+        const rawResult = await agentClient.getContainerLogs(nodeContext, host.containerId, queryOptions);
 
-      // Redact sensitive patterns in logs
-      const sanitizedLines = rawResult.lines.map((l) => this.redactSensitiveData(l));
-      const sanitizedEntries = rawResult.entries?.map((e) => ({
-        ...e,
-        message: this.redactSensitiveData(e.message),
-      }));
+        // Redact sensitive patterns in logs
+        const sanitizedLines = rawResult.lines.map((l) => this.redactSensitiveData(l));
+        const sanitizedEntries = rawResult.entries?.map((e) => ({
+          ...e,
+          message: this.redactSensitiveData(e.message),
+        }));
 
-      return {
-        id: host.id,
-        lines: sanitizedLines,
-        total: rawResult.total,
-        entries: sanitizedEntries,
-      };
+        return {
+          id: host.id,
+          lines: sanitizedLines,
+          total: rawResult.total,
+          entries: sanitizedEntries,
+        };
+      } catch (err: any) {
+        if (err.statusCode === 503 || err.message?.includes('OFFLINE')) {
+          const entries = [
+            {
+              timestamp: new Date().toISOString(),
+              level: 'warn' as const,
+              message: `[CẢNH BÁO HẠ TẦNG] Máy chủ cụm (Node) hiện đang ngoại tuyến (OFFLINE). Không thể kết nối lấy nhật ký thời gian thực.`,
+            },
+          ];
+          return {
+            id: host.id,
+            ...this.filterAndFormatLogEntries(entries, queryOptions),
+          };
+        }
+        throw err;
+      }
     }
 
     // Fallback if STOPPED or PENDING without active containerId

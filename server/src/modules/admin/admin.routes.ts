@@ -23,7 +23,10 @@ adminRouter.post('/hosts/:hostId/actions', AdminController.executeHostAction);
 
 // 4. Node Management
 adminRouter.get('/nodes', AdminController.listNodes);
-adminRouter.post('/nodes/:nodeId/status', AdminController.updateNodeStatus);
+adminRouter.post('/nodes', AdminController.registerNode);
+adminRouter.get('/nodes/:nodeId', AdminController.getNodeDetails);
+adminRouter.put('/nodes/:nodeId/status', AdminController.updateNodeStatus);
+adminRouter.post('/nodes/:nodeId/status', AdminController.updateNodeStatus); // Backward compatibility
 
 // 5. Plan Management
 adminRouter.get('/plans', AdminController.listPlans);

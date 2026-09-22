@@ -10,6 +10,7 @@ import { domainsRouter } from '../modules/domains/domains.routes.js';
 import { backupsRouter } from '../modules/backups/backups.routes.js';
 import { billingRouter } from '../modules/billing/billing.routes.js';
 import { adminRouter } from '../modules/admin/admin.routes.js';
+import { nodeAgentRouter } from '../modules/node-agent/node-agent.routes.js';
 
 export const apiRouter = Router();
 
@@ -45,4 +46,7 @@ apiRouter.use('/billing', billingRouter);
 
 // 11. Admin Panel & Controls: /api/v1/admin/*
 apiRouter.use('/admin', adminRouter);
+
+// 12. Node Agent Ingress: /api/v1/node-agent/* (heartbeat)
+apiRouter.use('/node-agent', nodeAgentRouter);
 

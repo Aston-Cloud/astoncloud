@@ -1,5 +1,5 @@
 import { query } from '../../db/index.js';
-import { NodeRow } from '../nodes/nodes.service.js';
+import { NodesService, NodeRow } from '../nodes/nodes.service.js';
 import { NodeContext } from '../node-agent/node-agent.interface.js';
 import { AppError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
@@ -14,8 +14,14 @@ export class SchedulerService {
   public static readonly MAX_PORT = 30000;
 
   /**
-   * Selects an eligible ONLINE node with sufficient resources and atomically reserves them.
-   * Prevents race conditions and over-subscription.
+   * Deterministic Multi-Node Scheduling & Atomic Resource Reservation.
+   * Rules:
+   * 1. Check & transition any heartbeat-timed-out nodes to OFFLINE.
+   * 2. Filter ONLINE nodes only (strictly exclude DRAINING, MAINTENANCE, OFFLINE).
+   * 3. Filter by available resources: CPU, RAM, Disk.
+   * 4. Prioritize candidate matching requested region.
+   * 5. Avoid unnecessary fragmentation by picking best-fit / highest capacity candidate.
+   * 6. Atomically reserve resources on the chosen node (independent per-node accounting).
    */
   public static async selectAndReserveNode(
     requestedRegion: string,
@@ -28,7 +34,10 @@ export class SchedulerService {
       '[SchedulerService] Attempting to schedule and reserve node resources'
     );
 
-    // 1. Fetch eligible candidates: status must be ONLINE and is_active = true
+    // 1. Run heartbeat timeout check to ensure stale nodes are marked OFFLINE
+    await NodesService.checkHeartbeatTimeouts();
+
+    // 2. Fetch eligible candidates: status must be ONLINE and is_active = true
     const { rows: allOnlineNodes } = await query<NodeRow>(
       `SELECT * FROM hosting_nodes 
        WHERE is_active = true 
@@ -41,7 +50,7 @@ export class SchedulerService {
     );
 
     if (allOnlineNodes.length === 0) {
-      // Check if nodes exist but lack resources, or if nodes are offline
+      // Diagnostic check for clear operational errors
       const { rows: anyNodes } = await query<NodeRow>(
         `SELECT id, name, status, available_cpu_cores, available_ram_mb, available_disk_mb 
          FROM hosting_nodes WHERE is_active = true`
@@ -58,23 +67,32 @@ export class SchedulerService {
       );
     }
 
-    // 2. Prioritize candidate matching requested region
+    // 3. Prioritize candidate matching requested region (e.g. 'Vietnam', 'Singapore', 'Tokyo')
     const cleanRegion = requestedRegion.split(' ')[0].trim().toLowerCase();
     const prioritizedNodes = [...allOnlineNodes].sort((a, b) => {
-      const aMatch = a.region.toLowerCase().includes(cleanRegion) || cleanRegion.includes(a.region.toLowerCase());
-      const bMatch = b.region.toLowerCase().includes(cleanRegion) || cleanRegion.includes(b.region.toLowerCase());
+      const aRegion = a.region.toLowerCase();
+      const bRegion = b.region.toLowerCase();
+      const aMatch = aRegion.includes(cleanRegion) || cleanRegion.includes(aRegion);
+      const bMatch = bRegion.includes(cleanRegion) || cleanRegion.includes(bRegion);
+
       if (aMatch && !bMatch) return -1;
       if (!aMatch && bMatch) return 1;
+
+      // Secondary sort: prefer node with more available RAM to prevent fragmentation
       return Number(b.available_ram_mb) - Number(a.available_ram_mb);
     });
 
-    // 3. Attempt atomic reservation on prioritized candidates (handles race conditions)
+    // 4. Attempt atomic reservation on prioritized candidate (concurrency-safe)
     for (const candidate of prioritizedNodes) {
       const reserveSql = `
         UPDATE hosting_nodes 
         SET available_cpu_cores = available_cpu_cores - $1,
+            allocated_cpu_cores = allocated_cpu_cores + $1,
             available_ram_mb = available_ram_mb - $2,
-            available_disk_mb = available_disk_mb - $3
+            allocated_ram_mb = allocated_ram_mb + $2,
+            available_disk_mb = available_disk_mb - $3,
+            allocated_disk_mb = allocated_disk_mb + $3,
+            updated_at = NOW()
         WHERE id = $4
           AND status = 'ONLINE'
           AND available_cpu_cores >= $1
@@ -95,6 +113,7 @@ export class SchedulerService {
         logger.info(
           {
             nodeId: reservedNode.id,
+            nodeRegion: reservedNode.region,
             remainingCpu: reservedNode.available_cpu_cores,
             remainingRam: reservedNode.available_ram_mb,
           },
@@ -123,6 +142,7 @@ export class SchedulerService {
 
   /**
    * Releases previously reserved or allocated resources back to a node.
+   * Guarantees independent per-node resource accounting.
    */
   public static async releaseNodeResources(
     nodeId: string,
@@ -138,8 +158,12 @@ export class SchedulerService {
     const releaseSql = `
       UPDATE hosting_nodes 
       SET available_cpu_cores = available_cpu_cores + $1,
+          allocated_cpu_cores = GREATEST(0, allocated_cpu_cores - $1),
           available_ram_mb = available_ram_mb + $2,
-          available_disk_mb = available_disk_mb + $3
+          allocated_ram_mb = GREATEST(0, allocated_ram_mb - $2),
+          available_disk_mb = available_disk_mb + $3,
+          allocated_disk_mb = GREATEST(0, allocated_disk_mb - $3),
+          updated_at = NOW()
       WHERE id = $4;
     `;
 
