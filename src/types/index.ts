@@ -63,6 +63,30 @@ export interface Host {
   autoRestart: boolean;
 }
 
+export interface HostLiveStats {
+  status: string;
+  available?: boolean;
+  cpu: {
+    usage: number;
+    limit: number;
+  };
+  memory: {
+    usage: number;
+    limit: number;
+  };
+  disk: {
+    usage: number;
+    limit: number;
+  };
+  network: {
+    rx: number;
+    tx: number;
+  };
+  uptime: number;
+  uptimeFormatted?: string;
+  timestamp: string;
+}
+
 export interface FileItem {
   id: string;
   name: string;

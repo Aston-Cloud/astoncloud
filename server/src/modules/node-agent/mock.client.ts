@@ -352,14 +352,127 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
     }
 
     const isRunning = record.status === 'running';
+    const now = new Date();
+
+    // Helper deterministic hash from string
+    const stringHash = (str: string): number => {
+      let h = 0;
+      for (let i = 0; i < str.length; i++) {
+        h = (h * 31 + str.charCodeAt(i)) >>> 0;
+      }
+      return h;
+    };
+
+    const hash = stringHash(record.hostId || record.id);
+    const cpuLimit = record.resources.cpuLimit || 1;
+    const memoryLimitMb = record.resources.memoryLimitMb || 512;
+    const diskLimitMb = record.resources.diskLimitMb || 5120;
+
+    if (!isRunning) {
+      const stoppedStatus = record.status === 'created' ? 'PROVISIONING' : 'STOPPED';
+      return {
+        id: record.id,
+        hostId: record.hostId,
+        status: stoppedStatus,
+        cpu: {
+          usage: 0,
+          limit: cpuLimit,
+        },
+        memory: {
+          usage: 0,
+          limit: memoryLimitMb,
+        },
+        disk: {
+          usage: Math.round(diskLimitMb * 0.08), // Static files footprint
+          limit: diskLimitMb,
+        },
+        network: {
+          rx: 0,
+          tx: 0,
+        },
+        uptime: 0,
+        uptimeFormatted: '0m',
+        timestamp: now.toISOString(),
+        cpuPercent: 0,
+        memoryUsageMb: 0,
+        memoryLimitMb,
+        pids: 0,
+      };
+    }
+
+    // Uptime calculated strictly from container start time
+    const uptimeSec = record.startedAt
+      ? Math.max(0, Math.floor((now.getTime() - record.startedAt.getTime()) / 1000))
+      : 0;
+
+    // Format human-readable uptime
+    const formatUptimeStr = (sec: number): string => {
+      if (sec <= 0) return '0m';
+      const days = Math.floor(sec / 86400);
+      const hours = Math.floor((sec % 86400) / 3600);
+      const minutes = Math.floor((sec % 3600) / 60);
+
+      if (days > 0) {
+        return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+      }
+      if (hours > 0) {
+        return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+      }
+      if (minutes > 0) {
+        return `${minutes}m`;
+      }
+      return `${sec}s`;
+    };
+
+    // Deterministic metrics calculation
+    // CPU: 12% - 24% with slight deterministic wave based on 10s intervals
+    const cpuStep = Math.floor(uptimeSec / 10) % 5;
+    const cpuUsage = Math.min(
+      100,
+      Number((14 + (hash % 10) + cpuStep * 0.8).toFixed(1))
+    );
+
+    // RAM: 22% - 32% of memory limit, respecting plan ceiling
+    const memRatio = 0.22 + (hash % 10) * 0.01;
+    const memUsageMb = Math.min(memoryLimitMb, Math.round(memoryLimitMb * memRatio));
+
+    // Disk: 8% - 14% of disk limit
+    const diskRatio = 0.08 + (hash % 6) * 0.01;
+    const diskUsageMb = Math.min(diskLimitMb, Math.round(diskLimitMb * diskRatio));
+
+    // Network: progressive RX/TX based on hash and uptime
+    const baseRx = 1048576 + (hash % 300) * 1024;
+    const baseTx = 2097152 + (hash % 600) * 1024;
+    const rx = baseRx + uptimeSec * 256;
+    const tx = baseTx + uptimeSec * 512;
+
     return {
       id: record.id,
       hostId: record.hostId,
-      cpuPercent: isRunning ? Number((Math.random() * 5 + 1.2).toFixed(1)) : 0,
-      memoryUsageMb: isRunning ? Math.round(record.resources.memoryLimitMb * 0.25) : 0,
-      memoryLimitMb: record.resources.memoryLimitMb,
-      pids: isRunning ? 3 : 0,
-      timestamp: new Date().toISOString(),
+      status: 'RUNNING',
+      cpu: {
+        usage: cpuUsage,
+        limit: cpuLimit,
+      },
+      memory: {
+        usage: memUsageMb,
+        limit: memoryLimitMb,
+      },
+      disk: {
+        usage: diskUsageMb,
+        limit: diskLimitMb,
+      },
+      network: {
+        rx,
+        tx,
+      },
+      uptime: uptimeSec,
+      uptimeFormatted: formatUptimeStr(uptimeSec),
+      timestamp: now.toISOString(),
+      cpuPercent: cpuUsage,
+      memoryUsageMb: memUsageMb,
+      memoryLimitMb,
+      pids: 3 + (hash % 4),
     };
   }
 

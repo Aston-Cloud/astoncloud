@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Cpu,
   Layers,
@@ -12,8 +12,13 @@ import {
   Check,
   Calendar,
   ExternalLink,
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  Wifi,
+  AlertCircle,
 } from 'lucide-react';
-import { Host } from '../../types';
+import { Host, HostLiveStats } from '../../types';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { ResourceGauge, ProgressBar } from '../../components/ui/ResourceGauge';
@@ -24,9 +29,19 @@ interface HostOverviewTabProps {
   onNavigateTab: (tabId: string) => void;
 }
 
+const formatBytes = (bytes: number): string => {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+};
+
 export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNavigateTab }) => {
   const { showToast } = useToast();
-  const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [liveStats, setLiveStats] = useState<HostLiveStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, keyName: string) => {
     navigator.clipboard.writeText(text);
@@ -39,9 +54,104 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  // Periodic polling for host live metrics (every 6 seconds)
+  useEffect(() => {
+    let isMounted = true;
+    let timerId: any = null;
+
+    const fetchStats = async () => {
+      if (host.status === 'DELETING') return;
+
+      try {
+        const rawId = host.numericId ? String(host.numericId) : host.id.replace(/^host-/, '');
+        const token = localStorage.getItem('aston_auth_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(`/api/v1/hosts/${rawId}/stats`, { headers });
+        if (!res.ok) {
+          if (isMounted) setStatsError('Không thể tải số liệu thời gian thực');
+          return;
+        }
+
+        const json = await res.json();
+        if (isMounted && json.success && json.data) {
+          const data = json.data;
+          setLiveStats({
+            status: data.status,
+            available: data.available !== false,
+            cpu: data.cpu || { usage: data.cpuPercent || 0, limit: host.cpuLimit || 1 },
+            memory: data.memory || { usage: data.memoryUsageMb || 0, limit: host.ramTotal || 512 },
+            disk: data.disk || { usage: Math.round(host.diskUsage * 1024), limit: host.diskTotal * 1024 },
+            network: data.network || { rx: 0, tx: 0 },
+            uptime: data.uptime || 0,
+            uptimeFormatted: data.uptimeFormatted,
+            timestamp: data.timestamp || new Date().toISOString(),
+          });
+          setStatsError(null);
+        }
+      } catch (_err) {
+        if (isMounted) setStatsError('Lỗi kết nối tới Node Agent');
+      }
+    };
+
+    fetchStats();
+
+    const startPolling = () => {
+      if (!timerId) {
+        timerId = setInterval(() => {
+          if (document.visibilityState === 'visible') {
+            fetchStats();
+          }
+        }, 6000);
+      }
+    };
+
+    const stopPolling = () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchStats();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [host.id, host.numericId, host.status]);
+
   const isPending = host.status === 'PENDING' || host.status === 'PROVISIONING';
-  const ramPercentage = isPending ? 0 : Math.round((host.ramUsage / host.ramTotal) * 100);
-  const diskPercentage = isPending ? 0 : Math.round((host.diskUsage / host.diskTotal) * 100);
+  const isStopped = host.status === 'STOPPED' || host.status === 'offline';
+  const isRunning = host.status === 'RUNNING' || host.status === 'online';
+
+  // Extract real numbers from liveStats or host defaults
+  const cpuUsage = isStopped || isPending ? 0 : (liveStats?.cpu?.usage ?? host.cpuUsage);
+  const cpuLimit = liveStats?.cpu?.limit ?? (host.cpuLimit || (host.planId === 'developer' ? 2 : host.planId === 'pro' ? 4 : 1));
+
+  const ramTotalMb = liveStats?.memory?.limit ?? (host.ramTotal || 512);
+  const ramUsageMb = isStopped || isPending ? 0 : (liveStats?.memory?.usage ?? host.ramUsage);
+  const ramPercentage = isStopped || isPending ? 0 : Math.min(100, Math.round((ramUsageMb / ramTotalMb) * 100));
+
+  const diskLimitGb = liveStats?.disk?.limit ? Math.round(liveStats.disk.limit / 1024) : host.diskTotal;
+  const diskUsageGb = liveStats?.disk?.usage ? Number((liveStats.disk.usage / 1024).toFixed(1)) : host.diskUsage;
+  const diskPercentage = isPending ? 0 : Math.min(100, Math.round((diskUsageGb / diskLimitGb) * 100));
+
+  const networkRx = isStopped || isPending ? 0 : (liveStats?.network?.rx || 0);
+  const networkTx = isStopped || isPending ? 0 : (liveStats?.network?.tx || 0);
+  const displayUptime = isStopped ? '0m (Đã dừng)' : isPending ? 'Chưa khả dụng' : (liveStats?.uptimeFormatted || host.uptime || '0m');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -83,8 +193,53 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
         </Card>
       )}
 
-      {/* Resource Gauges Trio */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+      {/* Stopped Host Alert Banner */}
+      {isStopped && (
+        <Card
+          variant="raised"
+          padding="md"
+          style={{
+            background: 'linear-gradient(135deg, rgba(100, 116, 139, 0.08) 0%, var(--bg-card) 100%)',
+            borderLeft: '4px solid #64748b',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '10px',
+                background: 'rgba(100, 116, 139, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#64748b',
+                flexShrink: 0,
+              }}
+            >
+              <AlertCircle size={20} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-main)', marginBottom: '2px' }}>
+                Máy chủ hiện đang tạm dừng (Stopped)
+              </div>
+              <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', margin: 0 }}>
+                Tiến trình container không hoạt động. Mức sử dụng CPU và RAM đang ở mức 0. Dữ liệu trên ổ cứng NVMe vẫn được bảo toàn nguyên vẹn.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Live Polling Indicator & Warning */}
+      {statsError && (
+        <div style={{ fontSize: '0.8rem', color: '#e11d48', display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', background: '#ffe4e6', borderRadius: '6px' }}>
+          <AlertCircle size={14} /> {statsError}
+        </div>
+      )}
+
+      {/* Resource Gauges Grid (CPU, RAM, Disk, Network & Uptime) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px' }}>
         {/* CPU */}
         <Card variant="raised" padding="md">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -92,15 +247,15 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
               Cấu hình Phân bổ CPU
             </span>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-pink)', background: 'var(--accent-pink-light)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
-              {host.cpuLimit ? `${host.cpuLimit} vCPU` : host.plan.cpu}
+              {cpuLimit} vCPU
             </span>
           </div>
           <div className="nm-inset" style={{ borderRadius: 'var(--radius-md)', padding: '4px' }}>
             <ResourceGauge
               label="Tải Điện toán Thực tế"
-              value={isPending ? 0 : host.cpuUsage}
-              displayValue={isPending ? 'Chưa khả dụng' : `${host.cpuUsage}%`}
-              subText={isPending ? 'Chờ cấp phát container' : 'Đa luồng thời gian thực'}
+              value={cpuUsage}
+              displayValue={isPending ? 'Chưa khả dụng' : `${cpuUsage}%`}
+              subText={isPending ? 'Chờ cấp phát container' : isStopped ? 'Máy chủ đang dừng' : 'Đa luồng thời gian thực'}
               color="var(--accent-pink)"
               size="md"
             />
@@ -114,15 +269,15 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
               Hiệu suất Sử dụng RAM
             </span>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#06b6d4', background: '#ecfeff', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
-              {host.plan.ram}
+              {ramTotalMb >= 1024 ? `${(ramTotalMb / 1024).toFixed(0)} GB` : `${ramTotalMb} MB`}
             </span>
           </div>
           <div className="nm-inset" style={{ borderRadius: 'var(--radius-md)', padding: '4px' }}>
             <ResourceGauge
               label="RAM Đang sử dụng"
               value={ramPercentage}
-              displayValue={isPending ? 'Chưa khả dụng' : `${host.ramUsage} MB`}
-              subText={isPending ? `Định mức: ${host.ramTotal} MB` : `trên tổng ${host.ramTotal} MB`}
+              displayValue={isPending ? 'Chưa khả dụng' : `${ramUsageMb} MB`}
+              subText={isPending ? `Định mức: ${ramTotalMb} MB` : `trên tổng ${ramTotalMb} MB`}
               color="#06b6d4"
               size="md"
             />
@@ -136,18 +291,54 @@ export const HostOverviewTab: React.FC<HostOverviewTabProps> = ({ host, onNaviga
               Dung lượng Ổ cứng NVMe
             </span>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#10b981', background: '#ecfdf5', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
-              {host.plan.disk}
+              {diskLimitGb} GB NVMe
             </span>
           </div>
           <div className="nm-inset" style={{ borderRadius: 'var(--radius-md)', padding: '4px' }}>
             <ResourceGauge
               label="Dung lượng Đã dùng"
               value={diskPercentage}
-              displayValue={isPending ? 'Chưa khả dụng' : `${host.diskUsage} GB`}
-              subText={isPending ? `Định mức: ${host.diskTotal} GB NVMe` : `còn trống ${(host.diskTotal - host.diskUsage).toFixed(1)} GB`}
+              displayValue={isPending ? 'Chưa khả dụng' : `${diskUsageGb} GB`}
+              subText={isPending ? `Định mức: ${diskLimitGb} GB NVMe` : `còn trống ${(diskLimitGb - diskUsageGb).toFixed(1)} GB`}
               color="#10b981"
               size="md"
             />
+          </div>
+        </Card>
+
+        {/* Network & Uptime */}
+        <Card variant="raised" padding="md">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+              Lưu lượng Mạng & Uptime
+            </span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#8b5cf6', background: '#f5f3ff', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
+              {displayUptime}
+            </span>
+          </div>
+          <div className="nm-inset" style={{ borderRadius: 'var(--radius-md)', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                <ArrowDown size={14} color="#10b981" /> Nhận (RX):
+              </div>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-main)' }}>
+                {formatBytes(networkRx)}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                <ArrowUp size={14} color="#3b82f6" /> Gửi (TX):
+              </div>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-main)' }}>
+                {formatBytes(networkTx)}
+              </span>
+            </div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(226, 232, 240, 0.6)', paddingTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Thời gian trực tuyến:</span>
+              <span style={{ fontWeight: 600, color: isRunning ? '#10b981' : 'var(--text-secondary)' }}>
+                ● {displayUptime}
+              </span>
+            </div>
           </div>
         </Card>
       </div>

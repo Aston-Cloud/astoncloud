@@ -545,6 +545,19 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       };
     }
 
+    // 14b. Query node by specific ID
+    if (params.length > 0 && (q.includes('WHERE id = $1') || q.includes('WHERE hosting_nodes.id = $1'))) {
+      const nodeId = String(params[0]);
+      const match = memoryStore.nodes.find((n) => n.id === nodeId && n.is_active);
+      return {
+        command: 'SELECT',
+        rowCount: match ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (match ? [match] : []) as unknown as R[],
+      };
+    }
+
     // 14b. Region search query
     if (params.length > 0 && (q.includes('ILIKE') || q.includes('region'))) {
       const region = String(params[0]).replace(/%/g, '').toLowerCase().trim();

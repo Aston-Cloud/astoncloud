@@ -163,6 +163,22 @@ export class ContainersController {
       success: true,
       data: {
         ...stats,
+        cpu: {
+          usage: stats.cpuPercentage,
+          limit: stats.cpuLimit,
+        },
+        memory: {
+          usage: stats.memoryUsageMb,
+          limit: stats.memoryLimitMb,
+        },
+        disk: {
+          usage: stats.diskUsageMb,
+          limit: stats.diskLimitMb,
+        },
+        network: {
+          rx: stats.networkRxBytes,
+          tx: stats.networkTxBytes,
+        },
         cpuPercent: stats.cpuPercentage,
         pids: stats.pidsCurrent,
         hostId: parseParams.data.id,

@@ -176,9 +176,35 @@ export class ProductionNodeAgentClient implements INodeAgentClient {
     node: NodeContext,
     containerId: string
   ): Promise<ContainerStatsResult> {
-    return this.request<ContainerStatsResult>(node, `/containers/${containerId}/stats`, {
+    const res = await this.request<any>(node, `/containers/${containerId}/stats`, {
       method: 'GET',
     });
+
+    const cpuUsage = res.cpu?.usage ?? res.cpuPercentage ?? res.cpuPercent ?? 0;
+    const cpuLimit = res.cpu?.limit ?? res.cpuLimit ?? 1;
+    const memUsage = res.memory?.usage ?? res.memoryUsageMb ?? 0;
+    const memLimit = res.memory?.limit ?? res.memoryLimitMb ?? 512;
+    const diskUsage = res.disk?.usage ?? res.diskUsageMb ?? 0;
+    const diskLimit = res.disk?.limit ?? res.diskLimitMb ?? 5120;
+    const rx = res.network?.rx ?? res.networkRxBytes ?? 0;
+    const tx = res.network?.tx ?? res.networkTxBytes ?? 0;
+
+    return {
+      id: res.id || containerId,
+      hostId: res.hostId,
+      status: res.status || 'RUNNING',
+      cpu: { usage: cpuUsage, limit: cpuLimit },
+      memory: { usage: memUsage, limit: memLimit },
+      disk: { usage: diskUsage, limit: diskLimit },
+      network: { rx, tx },
+      uptime: res.uptime ?? 0,
+      uptimeFormatted: res.uptimeFormatted,
+      timestamp: res.timestamp || new Date().toISOString(),
+      cpuPercent: cpuUsage,
+      memoryUsageMb: memUsage,
+      memoryLimitMb: memLimit,
+      pids: res.pidsCurrent ?? res.pids ?? 0,
+    };
   }
 
   public async getContainerLogs(

@@ -50,13 +50,19 @@ export interface DockerContainerDetail {
 
 export interface DockerContainerStats {
   id: string;
+  status: string;
   timestamp: string;
   cpuPercentage: number;
+  cpuLimit: number;
   memoryUsageMb: number;
   memoryLimitMb: number;
+  diskUsageMb: number;
+  diskLimitMb: number;
   networkRxBytes: number;
   networkTxBytes: number;
   pidsCurrent: number;
+  uptime: number;
+  uptimeFormatted?: string;
 }
 
 export interface IDockerDriver {
@@ -211,15 +217,89 @@ export class MockDockerDriver implements IDockerDriver {
     }
 
     const isRunning = container.status === 'running';
+    const now = new Date();
+
+    const stringHash = (str: string): number => {
+      let h = 0;
+      for (let i = 0; i < str.length; i++) {
+        h = (h * 31 + str.charCodeAt(i)) >>> 0;
+      }
+      return h;
+    };
+
+    const hash = stringHash(container.id || container.name);
+    const cpuLimit = container.resources.cpuLimit || 1;
+    const memoryLimitMb = container.resources.memoryLimitMb || 512;
+    const diskLimitMb = container.resources.diskLimitMb || 5120;
+
+    if (!isRunning) {
+      const stoppedStatus = container.status === 'created' ? 'PROVISIONING' : 'STOPPED';
+      return {
+        id: container.id,
+        status: stoppedStatus,
+        timestamp: now.toISOString(),
+        cpuPercentage: 0,
+        cpuLimit,
+        memoryUsageMb: 0,
+        memoryLimitMb,
+        diskUsageMb: Math.round(diskLimitMb * 0.08),
+        diskLimitMb,
+        networkRxBytes: 0,
+        networkTxBytes: 0,
+        pidsCurrent: 0,
+        uptime: 0,
+        uptimeFormatted: '0m',
+      };
+    }
+
+    const uptimeSec = container.startedAt
+      ? Math.max(0, Math.floor((now.getTime() - container.startedAt.getTime()) / 1000))
+      : 0;
+
+    const formatUptimeStr = (sec: number): string => {
+      if (sec <= 0) return '0m';
+      const days = Math.floor(sec / 86400);
+      const hours = Math.floor((sec % 86400) / 3600);
+      const minutes = Math.floor((sec % 3600) / 60);
+
+      if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+      if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+      if (minutes > 0) return `${minutes}m`;
+      return `${sec}s`;
+    };
+
+    const cpuStep = Math.floor(uptimeSec / 10) % 5;
+    const cpuUsage = Math.min(
+      100,
+      Number((14 + (hash % 10) + cpuStep * 0.8).toFixed(1))
+    );
+
+    const memRatio = 0.22 + (hash % 10) * 0.01;
+    const memUsageMb = Math.min(memoryLimitMb, Math.round(memoryLimitMb * memRatio));
+
+    const diskRatio = 0.08 + (hash % 6) * 0.01;
+    const diskUsageMb = Math.min(diskLimitMb, Math.round(diskLimitMb * diskRatio));
+
+    const baseRx = 1048576 + (hash % 300) * 1024;
+    const baseTx = 2097152 + (hash % 600) * 1024;
+    const rx = baseRx + uptimeSec * 256;
+    const tx = baseTx + uptimeSec * 512;
+
     return {
       id: container.id,
-      timestamp: new Date().toISOString(),
-      cpuPercentage: isRunning ? Math.round((Math.random() * 8 + 2) * 10) / 10 : 0,
-      memoryUsageMb: isRunning ? Math.round(container.resources.memoryLimitMb * 0.25) : 0,
-      memoryLimitMb: container.resources.memoryLimitMb,
-      networkRxBytes: isRunning ? Math.floor(Math.random() * 2048 + 1024) : 0,
-      networkTxBytes: isRunning ? Math.floor(Math.random() * 4096 + 2048) : 0,
-      pidsCurrent: isRunning ? 5 : 0,
+      status: 'RUNNING',
+      timestamp: now.toISOString(),
+      cpuPercentage: cpuUsage,
+      cpuLimit,
+      memoryUsageMb: memUsageMb,
+      memoryLimitMb,
+      diskUsageMb,
+      diskLimitMb,
+      networkRxBytes: rx,
+      networkTxBytes: tx,
+      pidsCurrent: 3 + (hash % 4),
+      uptime: uptimeSec,
+      uptimeFormatted: formatUptimeStr(uptimeSec),
     };
   }
 }
@@ -452,20 +532,79 @@ export class DockerodeDriver implements IDockerDriver {
   async getContainerStats(idOrName: string): Promise<DockerContainerStats> {
     try {
       const container = this.docker.getContainer(idOrName);
-      const stream = (await container.stats({ stream: false })) as any;
+      const [stream, inspect] = await Promise.all([
+        container.stats({ stream: false }) as Promise<any>,
+        container.inspect().catch(() => null),
+      ]);
 
+      const now = new Date();
       const memoryUsage = stream.memory_stats?.usage || 0;
       const memoryLimit = stream.memory_stats?.limit || 1;
 
+      // Calculate CPU percentage
+      let cpuPercentage = 0;
+      if (stream.cpu_stats && stream.precpu_stats) {
+        const cpuDelta = (stream.cpu_stats.cpu_usage?.total_usage || 0) - (stream.precpu_stats.cpu_usage?.total_usage || 0);
+        const systemDelta = (stream.cpu_stats.system_cpu_usage || 0) - (stream.precpu_stats.system_cpu_usage || 0);
+        const onlineCpus = stream.cpu_stats.online_cpus || stream.cpu_stats.cpu_usage?.percpu_usage?.length || 1;
+        if (systemDelta > 0 && cpuDelta > 0) {
+          cpuPercentage = Math.min(100, Math.round(((cpuDelta / systemDelta) * onlineCpus * 100) * 10) / 10);
+        }
+      }
+
+      // Calculate Network RX/TX
+      let networkRxBytes = 0;
+      let networkTxBytes = 0;
+      if (stream.networks) {
+        for (const iface of Object.values(stream.networks) as any[]) {
+          networkRxBytes += iface.rx_bytes || 0;
+          networkTxBytes += iface.tx_bytes || 0;
+        }
+      }
+
+      // Uptime & Status
+      let uptime = 0;
+      let status = 'RUNNING';
+      if (inspect?.State) {
+        status = inspect.State.Running ? 'RUNNING' : (inspect.State.Status?.toUpperCase() || 'STOPPED');
+        if (inspect.State.StartedAt) {
+          const startedAt = new Date(inspect.State.StartedAt).getTime();
+          if (!isNaN(startedAt) && startedAt > 0) {
+            uptime = Math.max(0, Math.floor((now.getTime() - startedAt) / 1000));
+          }
+        }
+      }
+
+      const formatUptimeStr = (sec: number): string => {
+        if (sec <= 0) return '0m';
+        const days = Math.floor(sec / 86400);
+        const hours = Math.floor((sec % 86400) / 3600);
+        const minutes = Math.floor((sec % 3600) / 60);
+
+        if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+        if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+        if (minutes > 0) return `${minutes}m`;
+        return `${sec}s`;
+      };
+
+      const cpuLimit = inspect?.HostConfig?.NanoCpus ? inspect.HostConfig.NanoCpus / 1e9 : 1;
+      const memLimitMb = Math.round(memoryLimit / (1024 * 1024));
+
       return {
         id: idOrName,
-        timestamp: new Date().toISOString(),
-        cpuPercentage: 0,
+        status,
+        timestamp: now.toISOString(),
+        cpuPercentage,
+        cpuLimit,
         memoryUsageMb: Math.round(memoryUsage / (1024 * 1024)),
-        memoryLimitMb: Math.round(memoryLimit / (1024 * 1024)),
-        networkRxBytes: 0,
-        networkTxBytes: 0,
+        memoryLimitMb: memLimitMb,
+        diskUsageMb: Math.round(((inspect as any)?.SizeRootFs ? (inspect as any).SizeRootFs / (1024 * 1024) : 250)),
+        diskLimitMb: 15360,
+        networkRxBytes,
+        networkTxBytes,
         pidsCurrent: stream.pids_stats?.current || 0,
+        uptime,
+        uptimeFormatted: formatUptimeStr(uptime),
       };
     } catch (err: any) {
       if (err.statusCode === 404) {

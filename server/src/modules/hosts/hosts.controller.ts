@@ -72,7 +72,19 @@ export class HostsController {
       const user = req.user!;
       const hostId = req.params.id as string;
       const stats = await HostsService.getHostStats(hostId, user.id, user.role);
-      sendSuccess(res, { stats });
+      sendSuccess(res, {
+        status: stats.status,
+        cpu: stats.cpu,
+        memory: stats.memory,
+        disk: stats.disk,
+        network: stats.network,
+        uptime: stats.uptime,
+        uptimeFormatted: stats.uptimeFormatted,
+        timestamp: stats.timestamp,
+        available: (stats as any).available ?? true,
+        error: (stats as any).error,
+        stats,
+      });
     } catch (err) {
       next(err);
     }

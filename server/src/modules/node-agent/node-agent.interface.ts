@@ -49,11 +49,32 @@ export interface ContainerDeleteResult {
 export interface ContainerStatsResult {
   id: string;
   hostId?: string;
-  cpuPercent: number;
-  memoryUsageMb: number;
-  memoryLimitMb: number;
-  pids: number;
+  status: 'RUNNING' | 'STOPPED' | 'PROVISIONING' | 'ERROR' | string;
+  cpu: {
+    usage: number; // percentage (0-100) or 0 when stopped
+    limit: number; // allocated vCPU cores
+  };
+  memory: {
+    usage: number; // MB used
+    limit: number; // MB limit
+  };
+  disk: {
+    usage: number; // MB used
+    limit: number; // MB limit
+  };
+  network: {
+    rx: number; // bytes received
+    tx: number; // bytes transmitted
+  };
+  uptime: number; // seconds
+  uptimeFormatted?: string; // human readable uptime (e.g. "2h 14m", "14m", "2d 5h")
   timestamp: string;
+
+  // Backward compatibility fields
+  cpuPercent?: number;
+  memoryUsageMb?: number;
+  memoryLimitMb?: number;
+  pids?: number;
 }
 
 export interface LogEntryItem {

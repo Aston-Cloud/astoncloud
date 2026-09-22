@@ -205,11 +205,45 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             autoRestart: true,
           };
         });
-        setHosts(mapped);
-        if (mapped.length > 0) {
+
+        // Enrich online hosts with real backend stats
+        const enriched: Host[] = await Promise.all(
+          mapped.map(async (hostItem) => {
+            if (hostItem.status === 'RUNNING' && hostItem.numericId) {
+              try {
+                const statsRes = await fetch(`/api/v1/hosts/${hostItem.numericId}/stats`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (statsRes.ok) {
+                  const sData = await statsRes.json();
+                  if (sData.success && sData.data) {
+                    const st = sData.data;
+                    const cpuUsage = st.cpu?.usage ?? st.cpuPercent ?? 0;
+                    const ramUsage = st.memory?.usage ?? st.memoryUsageMb ?? 0;
+                    const diskUsageMb = st.disk?.usage ?? 0;
+                    return {
+                      ...hostItem,
+                      cpuUsage,
+                      ramUsage,
+                      diskUsage: diskUsageMb > 0 ? Number((diskUsageMb / 1024).toFixed(1)) : hostItem.diskUsage,
+                      uptime: st.uptimeFormatted || hostItem.uptime,
+                      uptimeSeconds: st.uptime || hostItem.uptimeSeconds,
+                    };
+                  }
+                }
+              } catch (_err) {
+                // Fallback to defaults
+              }
+            }
+            return hostItem;
+          })
+        );
+
+        setHosts(enriched);
+        if (enriched.length > 0) {
           setCurrentHostId((prev) => {
-            const exists = mapped.some((m) => m.id === prev);
-            return exists ? prev : mapped[0].id;
+            const exists = enriched.some((m) => m.id === prev);
+            return exists ? prev : enriched[0].id;
           });
         }
       }
