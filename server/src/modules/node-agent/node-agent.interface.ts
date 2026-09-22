@@ -69,6 +69,47 @@ export interface ContainerLogsResult {
   entries?: LogEntryItem[];
 }
 
+export interface FileEntryItem {
+  name: string;
+  type: 'file' | 'directory';
+  size: number;
+  modifiedAt: string;
+}
+
+export interface ListFilesResult {
+  path: string;
+  entries: FileEntryItem[];
+}
+
+export interface ReadFileResult {
+  path: string;
+  name: string;
+  content: string;
+  size: number;
+  isBinary: boolean;
+  encoding: 'utf-8' | 'base64';
+}
+
+export interface WriteFileOptions {
+  path: string;
+  content: string;
+  encoding?: 'utf-8' | 'base64';
+}
+
+export interface UploadFileOptions {
+  destinationPath: string;
+  filename: string;
+  content: string | Buffer;
+  encoding?: 'utf-8' | 'base64';
+}
+
+export interface FileDownloadStream {
+  stream: NodeJS.ReadableStream;
+  filename: string;
+  size: number;
+  mimeType?: string;
+}
+
 export interface INodeAgentClient {
   createContainer(node: NodeContext, options: CreateContainerOptions): Promise<ContainerResult>;
   startContainer(node: NodeContext, containerId: string): Promise<ContainerActionResult>;
@@ -82,4 +123,14 @@ export interface INodeAgentClient {
     containerId: string,
     options?: { tail?: number; since?: number; level?: string; search?: string }
   ): Promise<ContainerLogsResult>;
+
+  // Host Filesystem Management Endpoints
+  listFiles(node: NodeContext, hostId: string, dirPath?: string): Promise<ListFilesResult>;
+  readFile(node: NodeContext, hostId: string, filePath: string, maxSizeBytes?: number): Promise<ReadFileResult>;
+  writeFile(node: NodeContext, hostId: string, options: WriteFileOptions): Promise<{ path: string; size: number }>;
+  createDirectory(node: NodeContext, hostId: string, dirPath: string): Promise<{ path: string }>;
+  deleteFile(node: NodeContext, hostId: string, targetPath: string): Promise<{ path: string; deleted: boolean }>;
+  renameFile(node: NodeContext, hostId: string, fromPath: string, toPath: string): Promise<{ from: string; to: string }>;
+  uploadFile(node: NodeContext, hostId: string, options: UploadFileOptions): Promise<{ path: string; size: number }>;
+  downloadFile(node: NodeContext, hostId: string, filePath: string): Promise<FileDownloadStream>;
 }

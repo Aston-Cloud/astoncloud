@@ -24,3 +24,8 @@ dist-ssr/
 .playwright-mcp/
 *.png
 *.md
+
+# Mock storage for local development
+mock-storage/
+.mock-storage/
+server/mock-storage/

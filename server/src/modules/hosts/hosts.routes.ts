@@ -2,7 +2,19 @@ import { Router } from 'express';
 import { HostsController } from './hosts.controller.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
-import { createHostSchema, updateHostSchema, hostActionSchema, hostLogsQuerySchema } from './hosts.schema.js';
+import {
+  createHostSchema,
+  updateHostSchema,
+  hostActionSchema,
+  hostLogsQuerySchema,
+  listFilesQuerySchema,
+  readFileQuerySchema,
+  writeFileSchema,
+  createDirectorySchema,
+  deleteFileQuerySchema,
+  renameFileSchema,
+  uploadFileSchema,
+} from './hosts.schema.js';
 
 export const hostsRouter = Router();
 
@@ -35,3 +47,31 @@ hostsRouter.get('/:id/logs', validate({ query: hostLogsQuerySchema }), HostsCont
 
 // GET /api/v1/hosts/:id/logs/stream - Server-Sent Events (SSE) live logs stream
 hostsRouter.get('/:id/logs/stream', HostsController.streamLogs);
+
+// ==========================================
+// HOST FILE MANAGER ROUTES
+// ==========================================
+
+// GET /api/v1/hosts/:id/files - List directory entries
+hostsRouter.get('/:id/files', validate({ query: listFilesQuerySchema }), HostsController.listFiles);
+
+// GET /api/v1/hosts/:id/files/content - Read file content
+hostsRouter.get('/:id/files/content', validate({ query: readFileQuerySchema }), HostsController.readFile);
+
+// PUT /api/v1/hosts/:id/files/content - Write file content
+hostsRouter.put('/:id/files/content', validate({ body: writeFileSchema }), HostsController.writeFile);
+
+// POST /api/v1/hosts/:id/files/directory - Create directory
+hostsRouter.post('/:id/files/directory', validate({ body: createDirectorySchema }), HostsController.createDirectory);
+
+// DELETE /api/v1/hosts/:id/files - Delete file or directory
+hostsRouter.delete('/:id/files', validate({ query: deleteFileQuerySchema }), HostsController.deleteFile);
+
+// POST /api/v1/hosts/:id/files/rename - Rename file or directory
+hostsRouter.post('/:id/files/rename', validate({ body: renameFileSchema }), HostsController.renameFile);
+
+// POST /api/v1/hosts/:id/files/upload - Upload file
+hostsRouter.post('/:id/files/upload', validate({ body: uploadFileSchema }), HostsController.uploadFile);
+
+// GET /api/v1/hosts/:id/files/download - Download file
+hostsRouter.get('/:id/files/download', validate({ query: readFileQuerySchema }), HostsController.downloadFile);

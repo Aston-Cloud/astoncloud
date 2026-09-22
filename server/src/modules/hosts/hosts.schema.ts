@@ -65,7 +65,48 @@ export const hostLogsQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
 });
 
+// Host File Manager Schemas
+export const listFilesQuerySchema = z.object({
+  path: z.string().optional().default('/'),
+});
+
+export const readFileQuerySchema = z.object({
+  path: z.string({ required_error: 'Tham số path là bắt buộc' }).min(1, 'Đường dẫn không được để trống'),
+});
+
+export const writeFileSchema = z.object({
+  path: z.string({ required_error: 'Đường dẫn tệp tin path là bắt buộc' }).min(1),
+  content: z.string({ required_error: 'Nội dung tệp tin content là bắt buộc' }),
+  encoding: z.enum(['utf-8', 'base64']).optional().default('utf-8'),
+});
+
+export const createDirectorySchema = z.object({
+  path: z.string({ required_error: 'Đường dẫn thư mục path là bắt buộc' }).min(1),
+});
+
+export const deleteFileQuerySchema = z.object({
+  path: z.string({ required_error: 'Tham số path là bắt buộc' }).min(1),
+});
+
+export const renameFileSchema = z.object({
+  fromPath: z.string({ required_error: 'Đường dẫn nguồn fromPath là bắt buộc' }).min(1),
+  toPath: z.string({ required_error: 'Đường dẫn đích toPath là bắt buộc' }).min(1),
+});
+
+export const uploadFileSchema = z.object({
+  destinationPath: z.string().optional().default('/'),
+  filename: z.string({ required_error: 'Tên tệp tin filename là bắt buộc' }).min(1),
+  content: z.string({ required_error: 'Nội dung content là bắt buộc' }),
+  encoding: z.enum(['utf-8', 'base64']).optional().default('utf-8'),
+});
+
 export type CreateHostInput = z.infer<typeof createHostSchema>;
 export type UpdateHostInput = z.infer<typeof updateHostSchema>;
 export type HostActionInput = z.infer<typeof hostActionSchema>;
 export type HostLogsQuery = z.infer<typeof hostLogsQuerySchema>;
+export type ListFilesQuery = z.infer<typeof listFilesQuerySchema>;
+export type ReadFileQuery = z.infer<typeof readFileQuerySchema>;
+export type WriteFileInput = z.infer<typeof writeFileSchema>;
+export type CreateDirectoryInput = z.infer<typeof createDirectorySchema>;
+export type RenameFileInput = z.infer<typeof renameFileSchema>;
+export type UploadFileInput = z.infer<typeof uploadFileSchema>;

@@ -147,4 +147,109 @@ export class HostsController {
       clearInterval(interval);
     });
   }
+
+  // ==========================================
+  // HOST FILE MANAGER HANDLERS
+  // ==========================================
+
+  public static async listFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const dirPath = (req.query.path as string) || '/';
+      const result = await HostsService.listFiles(user.id, user.role, hostId, dirPath);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async readFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const filePath = req.query.path as string;
+      const result = await HostsService.readFile(user.id, user.role, hostId, filePath);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async writeFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const result = await HostsService.writeFile(user.id, user.role, hostId, req.body);
+      sendSuccess(res, { ...result, message: 'Lưu tệp tin thành công' });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async createDirectory(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const dirPath = req.body.path as string;
+      const result = await HostsService.createDirectory(user.id, user.role, hostId, dirPath);
+      sendSuccess(res, { ...result, message: 'Tạo thư mục thành công' }, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async deleteFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const targetPath = req.query.path as string;
+      const result = await HostsService.deleteFile(user.id, user.role, hostId, targetPath);
+      sendSuccess(res, { ...result, message: 'Đã xóa tệp/thư mục thành công' });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async renameFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const { fromPath, toPath } = req.body;
+      const result = await HostsService.renameFile(user.id, user.role, hostId, fromPath, toPath);
+      sendSuccess(res, { ...result, message: 'Đổi tên tệp/thư mục thành công' });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async uploadFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const result = await HostsService.uploadFile(user.id, user.role, hostId, req.body);
+      sendSuccess(res, { ...result, message: 'Tải tệp tin lên thành công' }, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async downloadFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const filePath = req.query.path as string;
+      const download = await HostsService.downloadFile(user.id, user.role, hostId, filePath);
+
+      res.setHeader('Content-Disposition', `attachment; filename="${download.filename}"`);
+      res.setHeader('Content-Type', download.mimeType || 'application/octet-stream');
+      if (download.size > 0) {
+        res.setHeader('Content-Length', String(download.size));
+      }
+
+      download.stream.pipe(res);
+    } catch (err) {
+      next(err);
+    }
+  }
 }

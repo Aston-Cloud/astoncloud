@@ -5,7 +5,12 @@ import { RuntimesService } from '../runtimes/runtimes.service.js';
 import { NodesService, NodeRow } from '../nodes/nodes.service.js';
 import { SchedulerService } from '../scheduler/scheduler.service.js';
 import { getNodeAgentClient } from '../node-agent/client.factory.js';
-import { NodeContext } from '../node-agent/node-agent.interface.js';
+import {
+  NodeContext,
+  ListFilesResult,
+  ReadFileResult,
+  FileDownloadStream,
+} from '../node-agent/node-agent.interface.js';
 import { BadRequestError, NotFoundError, AppError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
 import type {
@@ -13,6 +18,8 @@ import type {
   UpdateHostInput,
   HostActionInput,
   HostLogsQuery,
+  WriteFileInput,
+  UploadFileInput,
 } from './hosts.schema.js';
 
 export type HostStatus =
@@ -797,5 +804,116 @@ export class HostsService {
       .replace(/token\s*=\s*['"][^'"]+['"]/gi, 'token="[REDACTED]"')
       .replace(/api[_-]?key\s*=\s*['"][^'"]+['"]/gi, 'apiKey="[REDACTED]"')
       .replace(/bearer\s+[a-zA-Z0-9_\-\.]+/gi, 'Bearer [REDACTED]');
+  }
+
+  // ==========================================
+  // HOST FILE MANAGER METHODS
+  // ==========================================
+
+  private static async getHostAndNodeForFiles(hostId: string, userId: string, role: string) {
+    const host = await this.getHostById(hostId, userId, role);
+
+    if (host.status === 'DELETING') {
+      throw new BadRequestError('Máy chủ đang trong quá trình xóa dọn dẹp, không thể thao tác tệp tin');
+    }
+
+    if (!host.nodeId) {
+      throw new BadRequestError('Máy chủ chưa được gán node hạ tầng');
+    }
+
+    const nodeContext = await this.getNodeContext(host.nodeId);
+    const agentClient = getNodeAgentClient();
+
+    return { host, nodeContext, agentClient };
+  }
+
+  public static async listFiles(
+    userId: string,
+    role: string,
+    hostId: string,
+    dirPath: string = '/'
+  ): Promise<ListFilesResult> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.listFiles(nodeContext, hostId, dirPath);
+  }
+
+  public static async readFile(
+    userId: string,
+    role: string,
+    hostId: string,
+    filePath: string
+  ): Promise<ReadFileResult> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.readFile(nodeContext, hostId, filePath);
+  }
+
+  public static async writeFile(
+    userId: string,
+    role: string,
+    hostId: string,
+    input: WriteFileInput
+  ): Promise<{ path: string; size: number }> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.writeFile(nodeContext, hostId, {
+      path: input.path,
+      content: input.content,
+      encoding: input.encoding,
+    });
+  }
+
+  public static async createDirectory(
+    userId: string,
+    role: string,
+    hostId: string,
+    dirPath: string
+  ): Promise<{ path: string }> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.createDirectory(nodeContext, hostId, dirPath);
+  }
+
+  public static async deleteFile(
+    userId: string,
+    role: string,
+    hostId: string,
+    targetPath: string
+  ): Promise<{ path: string; deleted: boolean }> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.deleteFile(nodeContext, hostId, targetPath);
+  }
+
+  public static async renameFile(
+    userId: string,
+    role: string,
+    hostId: string,
+    fromPath: string,
+    toPath: string
+  ): Promise<{ from: string; to: string }> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.renameFile(nodeContext, hostId, fromPath, toPath);
+  }
+
+  public static async uploadFile(
+    userId: string,
+    role: string,
+    hostId: string,
+    input: UploadFileInput
+  ): Promise<{ path: string; size: number }> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.uploadFile(nodeContext, hostId, {
+      destinationPath: input.destinationPath || '/',
+      filename: input.filename,
+      content: input.content,
+      encoding: input.encoding,
+    });
+  }
+
+  public static async downloadFile(
+    userId: string,
+    role: string,
+    hostId: string,
+    filePath: string
+  ): Promise<FileDownloadStream> {
+    const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
+    return agentClient.downloadFile(nodeContext, hostId, filePath);
   }
 }
