@@ -1,55 +1,59 @@
 import React from 'react';
 import {
   LayoutDashboard,
+  Users,
   Server,
-  PlusCircle,
+  Cpu,
+  Layers,
+  CreditCard,
+  FileText,
   Globe,
   Archive,
-  CreditCard,
+  Activity,
   Settings,
-  HelpCircle,
-  Cloud,
-  X,
+  ArrowLeft,
   ShieldCheck,
+  X,
 } from 'lucide-react';
-import { useAppState } from '../../context/AppStateContext';
 
-interface SidebarProps {
+interface AdminSidebarProps {
   currentRoute: string;
   onNavigate: (route: string) => void;
   isOpenMobile: boolean;
   onCloseMobile: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   currentRoute,
   onNavigate,
   isOpenMobile,
   onCloseMobile,
 }) => {
-  const { userProfile } = useAppState();
   const sections = [
     {
-      title: 'Kênh chính',
+      title: 'Tổng quan hệ thống',
       items: [
-        { id: 'dashboard', label: 'Bảng điều khiển', icon: <LayoutDashboard size={19} /> },
-        { id: 'hosts', label: 'Danh sách máy chủ', icon: <Server size={19} /> },
-        { id: 'create-host', label: 'Khởi tạo máy chủ', icon: <PlusCircle size={19} />, badge: 'Mới' },
+        { id: 'admin-dashboard', label: 'Dashboard Quản trị', icon: <LayoutDashboard size={18} /> },
+        { id: 'admin-users', label: 'Quản lý Người dùng', icon: <Users size={18} /> },
+        { id: 'admin-activity', label: 'Nhật ký Kiểm toán (Audit)', icon: <Activity size={18} /> },
       ],
     },
     {
-      title: 'Quản trị tài nguyên',
+      title: 'Hạ tầng & Dịch vụ',
       items: [
-        { id: 'domains', label: 'Tên miền', icon: <Globe size={19} /> },
-        { id: 'backups', label: 'Bản sao lưu', icon: <Archive size={19} /> },
+        { id: 'admin-hosts', label: 'Quản trị Máy chủ (Hosts)', icon: <Server size={18} /> },
+        { id: 'admin-nodes', label: 'Hạ tầng Nodes (Mock)', icon: <Cpu size={18} /> },
+        { id: 'admin-domains', label: 'Quản trị Tên miền', icon: <Globe size={18} /> },
+        { id: 'admin-backups', label: 'Quản trị Bản sao lưu', icon: <Archive size={18} /> },
       ],
     },
     {
-      title: 'Tài khoản & Dịch vụ',
+      title: 'Kinh doanh & Cấu hình',
       items: [
-        { id: 'billing', label: 'Thanh toán & Gói', icon: <CreditCard size={19} /> },
-        { id: 'settings', label: 'Cài đặt hệ thống', icon: <Settings size={19} /> },
-        { id: 'support', label: 'Hỗ trợ kỹ thuật', icon: <HelpCircle size={19} /> },
+        { id: 'admin-plans', label: 'Gói Hosting (Plans)', icon: <Layers size={18} /> },
+        { id: 'admin-subscriptions', label: 'Thuê bao dịch vụ', icon: <CreditCard size={18} /> },
+        { id: 'admin-invoices', label: 'Quản lý Hóa đơn', icon: <FileText size={18} /> },
+        { id: 'admin-settings', label: 'Cấu hình Hệ thống', icon: <Settings size={18} /> },
       ],
     },
   ];
@@ -68,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.4)',
+            backgroundColor: 'rgba(15, 23, 42, 0.5)',
             backdropFilter: 'blur(4px)',
             zIndex: 90,
           }}
@@ -78,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <aside
         className={isOpenMobile ? 'open-mobile' : ''}
         style={{
-          width: '260px',
+          width: '270px',
           background: 'var(--bg-main)',
           borderRight: 'var(--subtle-border)',
           display: 'flex',
@@ -94,7 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ? { position: 'fixed', left: 0, top: 0, transform: 'translateX(0)' }
             : {}),
         }}
-        id="app-sidebar"
+        id="admin-sidebar"
       >
         {/* Brand Header */}
         <div
@@ -102,13 +106,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingBottom: '24px',
+            paddingBottom: '20px',
             marginBottom: '16px',
             borderBottom: '1px solid rgba(210, 218, 230, 0.4)',
           }}
         >
           <div
-            onClick={() => handleNav('dashboard')}
+            onClick={() => handleNav('admin-dashboard')}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -118,46 +122,57 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <div
               style={{
-                width: '40px',
-                height: '40px',
+                width: '42px',
+                height: '42px',
                 borderRadius: '12px',
-                background: 'var(--accent-pink-gradient)',
-                boxShadow: 'var(--accent-pink-glow)',
+                background: 'linear-gradient(135deg, #e11d48 0%, #be123c 100%)',
+                boxShadow: '0 4px 14px rgba(225, 29, 72, 0.35)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 color: '#ffffff',
               }}
             >
-              <Cloud size={24} strokeWidth={2.4} />
+              <ShieldCheck size={24} strokeWidth={2.4} />
             </div>
             <div>
               <div
                 style={{
-                  fontSize: '1.15rem',
+                  fontSize: '1.1rem',
                   fontWeight: 800,
                   letterSpacing: '-0.3px',
                   color: 'var(--text-main)',
                   lineHeight: 1.1,
                 }}
               >
-                Aston<span style={{ color: 'var(--accent-pink)' }}>Cloud</span>
+                Aston<span style={{ color: '#e11d48' }}>Admin</span>
               </div>
               <div
                 style={{
-                  fontSize: '0.68rem',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                  color: 'var(--text-muted)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  marginTop: '3px',
                 }}
               >
-                Nền tảng Cloud Runtime
+                <span
+                  style={{
+                    fontSize: '0.62rem',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.8px',
+                    color: '#e11d48',
+                    background: 'rgba(225, 29, 72, 0.12)',
+                    padding: '1px 6px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  Root Control
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Close for mobile */}
           <button
             onClick={onCloseMobile}
             className="nm-btn"
@@ -166,36 +181,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
               padding: '6px',
               borderRadius: '50%',
             }}
-            id="mobile-close-sidebar"
+            id="mobile-close-admin-sidebar"
             aria-label="Đóng menu"
           >
             <X size={18} />
           </button>
         </div>
 
+        {/* Back to Customer Dashboard Button */}
+        <div style={{ marginBottom: '18px' }}>
+          <button
+            onClick={() => handleNav('dashboard')}
+            className="nm-btn"
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              padding: '10px 14px',
+              borderRadius: 'var(--radius-md)',
+              border: 'none',
+              background: 'var(--bg-sunken)',
+              boxShadow: 'var(--nm-inset-sm)',
+              color: 'var(--text-secondary)',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all var(--transition-fast)',
+            }}
+            title="Quay lại giao diện người dùng thường"
+          >
+            <ArrowLeft size={16} />
+            <span>Về Bảng Điều Khiển Khách</span>
+          </button>
+        </div>
+
         {/* Navigation Sections */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '22px', flex: 1 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', flex: 1 }}>
           {sections.map((sec) => (
             <div key={sec.title}>
               <div
                 style={{
-                  fontSize: '0.72rem',
+                  fontSize: '0.68rem',
                   fontWeight: 700,
                   textTransform: 'uppercase',
                   letterSpacing: '0.8px',
                   color: 'var(--text-muted)',
                   marginBottom: '8px',
-                  paddingLeft: '12px',
+                  paddingLeft: '10px',
                 }}
               >
                 {sec.title}
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                 {sec.items.map((item) => {
-                  const isActive =
-                    currentRoute === item.id ||
-                    (item.id === 'hosts' && currentRoute.startsWith('host-'));
+                  const isActive = currentRoute === item.id;
 
                   return (
                     <button
@@ -205,14 +247,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        padding: '11px 14px',
+                        padding: '10px 12px',
                         borderRadius: 'var(--radius-md)',
                         border: 'none',
                         background: isActive ? 'var(--bg-card)' : 'transparent',
                         boxShadow: isActive ? 'var(--nm-flat-sm)' : 'none',
-                        color: isActive ? 'var(--accent-pink)' : 'var(--text-secondary)',
+                        color: isActive ? '#e11d48' : 'var(--text-secondary)',
                         fontWeight: isActive ? 700 : 500,
-                        fontSize: '0.9rem',
+                        fontSize: '0.86rem',
                         cursor: 'pointer',
                         transition: 'all var(--transition-fast)',
                         outline: 'none',
@@ -221,30 +263,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       }}
                       className={isActive ? 'nm-card' : 'nm-btn'}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <span style={{ color: isActive ? 'var(--accent-pink)' : 'var(--text-muted)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ color: isActive ? '#e11d48' : 'var(--text-muted)' }}>
                           {item.icon}
                         </span>
                         <span>{item.label}</span>
                       </div>
 
-                      {item.badge && (
-                        <span
-                          style={{
-                            background: 'var(--accent-pink-gradient)',
-                            color: '#ffffff',
-                            fontSize: '0.68rem',
-                            fontWeight: 700,
-                            padding: '2px 7px',
-                            borderRadius: 'var(--radius-full)',
-                            boxShadow: 'var(--accent-pink-glow)',
-                          }}
-                        >
-                          {item.badge}
-                        </span>
-                      )}
-
-                      {/* Active indicator bar */}
                       {isActive && (
                         <span
                           style={{
@@ -254,7 +279,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             bottom: '25%',
                             width: '4px',
                             borderRadius: 'var(--radius-full)',
-                            background: 'var(--accent-pink)',
+                            background: '#e11d48',
                           }}
                         />
                       )}
@@ -266,57 +291,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
           ))}
         </div>
 
-        {/* Admin Portal Gateway Button if user is ADMIN */}
-        {userProfile?.role === 'ADMIN' && (
-          <div style={{ marginTop: 'auto', marginBottom: '14px' }}>
-            <button
-              onClick={() => handleNav('admin-dashboard')}
-              className="nm-btn"
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                padding: '11px 14px',
-                borderRadius: 'var(--radius-md)',
-                border: 'none',
-                background: 'linear-gradient(135deg, #e11d48 0%, #be123c 100%)',
-                color: '#ffffff',
-                fontSize: '0.86rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                boxShadow: '0 4px 14px rgba(225, 29, 72, 0.35)',
-              }}
-              id="admin-portal-button"
-            >
-              <ShieldCheck size={18} />
-              <span>Quản Trị Hệ Thống (Admin)</span>
-            </button>
-          </div>
-        )}
-
-        {/* Bottom Platform Card: Quick Support */}
+        {/* Infrastructure Status Banner */}
         <div
           className="nm-card"
           style={{
-            padding: '14px',
-            marginTop: userProfile?.role === 'ADMIN' ? '0' : 'auto',
+            padding: '12px',
+            marginTop: 'auto',
             background: 'var(--bg-sunken)',
             boxShadow: 'var(--nm-inset-sm)',
             borderRadius: 'var(--radius-md)',
             textAlign: 'center',
           }}
         >
-          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
-            Node.js • Bun • Python
+          <div
+            style={{
+              fontSize: '0.75rem',
+              fontWeight: 800,
+              color: 'var(--accent-teal)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+            }}
+          >
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: 'var(--accent-teal)',
+                boxShadow: '0 0 8px var(--accent-teal)',
+              }}
+            />
+            MOCK CLOUD INFRA
           </div>
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Hạ tầng Đám mây Thế hệ mới
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Hạ tầng Node Agent cục bộ an toàn
           </div>
         </div>
       </aside>
     </>
   );
 };
-

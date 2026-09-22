@@ -166,6 +166,26 @@ export interface MemoryPayment {
   updated_at: Date;
 }
 
+export interface MemoryAuditLog {
+  id: string;
+  actor_id: string;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id?: string | null;
+  details?: Record<string, any> | null;
+  ip_address?: string | null;
+  created_at: Date;
+}
+
+export interface MemorySystemSetting {
+  key: string;
+  value: string;
+  description: string;
+  is_secret: boolean;
+  updated_at: Date;
+}
+
 export interface MemoryUser {
   id: string;
   email: string;
@@ -391,6 +411,27 @@ class MemoryStore {
     },
   ];
   public payments: MemoryPayment[] = [];
+  public auditLogs: MemoryAuditLog[] = [
+    {
+      id: 'audit-seed-001',
+      actor_id: 'usr-admin-001',
+      actor_email: 'admin@astoncloud.vn',
+      action: 'SYSTEM_INITIALIZED',
+      target_type: 'SYSTEM',
+      target_id: 'cluster-root',
+      details: { note: 'Khởi tạo hệ thống quản trị Aston Cloud' },
+      ip_address: '127.0.0.1',
+      created_at: new Date(Date.now() - 3600000),
+    },
+  ];
+  public systemSettings: MemorySystemSetting[] = [
+    { key: 'platform_name', value: 'Aston Cloud Platform', description: 'Tên nền tảng hiển thị', is_secret: false, updated_at: new Date() },
+    { key: 'support_email', value: 'support@astoncloud.vn', description: 'Email tiếp nhận hỗ trợ', is_secret: false, updated_at: new Date() },
+    { key: 'default_region', value: 'Singapore', description: 'Vùng mặc định cho máy chủ mới', is_secret: false, updated_at: new Date() },
+    { key: 'maintenance_mode', value: 'false', description: 'Kích hoạt chế độ bảo trì toàn hệ thống', is_secret: false, updated_at: new Date() },
+    { key: 'allowed_runtimes', value: '["nodejs","bun","python"]', description: 'Danh sách môi trường thực thi được phép', is_secret: false, updated_at: new Date() },
+    { key: 'max_free_hosts_per_user', value: '1', description: 'Số lượng máy chủ dùng thử tối đa cho tài khoản miễn phí', is_secret: false, updated_at: new Date() },
+  ];
 }
 
 export const memoryStore = new MemoryStore();
@@ -2003,6 +2044,438 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     };
   }
 
+
+  // ============================================================================
+  // ADMIN QUERIES: USERS, NODES, PLANS, DOMAINS, AUDIT_LOGS, SETTINGS
+  // ============================================================================
+
+  // Admin: SELECT COUNT(*) FROM users
+  if (q.includes('COUNT(*)') && q.includes('FROM users')) {
+    let filtered = [...memoryStore.users];
+    if (params.length > 0) {
+      params.forEach((param) => {
+        const pStr = String(param).toLowerCase();
+        if (pStr === 'active' || pStr === 'suspended' || pStr === 'disabled') {
+          filtered = filtered.filter((u) => u.status.toLowerCase() === pStr);
+        } else if (pStr === 'user' || pStr === 'admin') {
+          filtered = filtered.filter((u) => u.role.toLowerCase() === pStr);
+        } else if (pStr.startsWith('%') && pStr.endsWith('%')) {
+          const raw = pStr.slice(1, -1);
+          filtered = filtered.filter(
+            (u) =>
+              u.email.toLowerCase().includes(raw) ||
+              u.username.toLowerCase().includes(raw) ||
+              u.display_name.toLowerCase().includes(raw)
+          );
+        }
+      });
+    }
+    return {
+      command: 'SELECT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [{ count: filtered.length }] as unknown as R[],
+    };
+  }
+
+  // Admin: SELECT ... FROM users (list/search/pagination)
+  if (q.includes('FROM users') && !q.includes('WHERE id = $1') && !q.includes('email = $1') && !q.includes('COUNT(*)')) {
+    let filtered = [...memoryStore.users];
+    if (params.length > 0) {
+      params.forEach((param) => {
+        if (typeof param === 'number') return;
+        const pStr = String(param).toLowerCase();
+        if (pStr === 'active' || pStr === 'suspended' || pStr === 'disabled') {
+          filtered = filtered.filter((u) => u.status.toLowerCase() === pStr);
+        } else if (pStr === 'user' || pStr === 'admin') {
+          filtered = filtered.filter((u) => u.role.toLowerCase() === pStr);
+        } else if (pStr.startsWith('%') && pStr.endsWith('%')) {
+          const raw = pStr.slice(1, -1);
+          filtered = filtered.filter(
+            (u) =>
+              u.email.toLowerCase().includes(raw) ||
+              u.username.toLowerCase().includes(raw) ||
+              u.display_name.toLowerCase().includes(raw)
+          );
+        }
+      });
+    }
+
+    const limitMatch = q.match(/LIMIT\s+(\$?\d+)/i);
+    const offsetMatch = q.match(/OFFSET\s+(\$?\d+)/i);
+    let limit = 50;
+    let offset = 0;
+
+    if (limitMatch) {
+      if (limitMatch[1].startsWith('$')) {
+        const paramIdx = parseInt(limitMatch[1].slice(1), 10) - 1;
+        if (typeof params[paramIdx] === 'number') limit = params[paramIdx] as number;
+      } else {
+        limit = parseInt(limitMatch[1], 10);
+      }
+    }
+
+    if (offsetMatch) {
+      if (offsetMatch[1].startsWith('$')) {
+        const paramIdx = parseInt(offsetMatch[1].slice(1), 10) - 1;
+        if (typeof params[paramIdx] === 'number') offset = params[paramIdx] as number;
+      } else {
+        offset = parseInt(offsetMatch[1], 10);
+      }
+    }
+
+    const paged = filtered.slice(offset, offset + limit);
+    return {
+      command: 'SELECT',
+      rowCount: paged.length,
+      oid: 0,
+      fields: [],
+      rows: paged as unknown as R[],
+    };
+  }
+
+  // Admin: UPDATE users SET status = $1 ... WHERE id = $2
+  if (q.startsWith('UPDATE users') && q.includes('SET status = $1')) {
+    const status = String(params[0]) as MemoryUser['status'];
+    const userId = String(params[1]);
+    const user = memoryStore.users.find((u) => u.id === userId);
+    if (user) {
+      user.status = status;
+      user.updated_at = new Date();
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: user ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (user ? [user] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: UPDATE users SET role = $1 ... WHERE id = $2
+  if (q.startsWith('UPDATE users') && q.includes('SET role = $1')) {
+    const role = String(params[0]) as MemoryUser['role'];
+    const userId = String(params[1]);
+    const user = memoryStore.users.find((u) => u.id === userId);
+    if (user) {
+      user.role = role;
+      user.updated_at = new Date();
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: user ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (user ? [user] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: UPDATE hosting_nodes SET status = $1 WHERE id = $2
+  if (q.startsWith('UPDATE hosting_nodes') && q.includes('SET status = $1')) {
+    const status = String(params[0]) as MemoryNode['status'];
+    const nodeId = String(params[1]);
+    const node = memoryStore.nodes.find((n) => n.id === nodeId);
+    if (node) {
+      node.status = status;
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: node ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (node ? [node] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: INSERT INTO hosting_plans
+  if (q.startsWith('INSERT INTO hosting_plans')) {
+    const id = String(params[0]);
+    const name = String(params[1]);
+    const desc = String(params[2] || '');
+    const priceMonthly = Number(params[3]);
+    const ramMb = Number(params[4]);
+    const cpu = Number(params[5]);
+    const diskMb = Number(params[6]);
+    const bwMb = Number(params[7] || diskMb * 10);
+    const newPlan: MemoryPlan = {
+      id,
+      name,
+      description: desc,
+      price_monthly: priceMonthly,
+      ram_mb: ramMb,
+      cpu_cores: cpu,
+      disk_mb: diskMb,
+      bandwidth_mb: bwMb,
+      is_active: true,
+      created_at: new Date(),
+    };
+    memoryStore.plans.push(newPlan);
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newPlan] as unknown as R[],
+    };
+  }
+
+  // Admin: UPDATE hosting_plans SET is_active = $1 WHERE id = $2
+  if (q.startsWith('UPDATE hosting_plans') && q.includes('SET is_active = $1')) {
+    const isActive = Boolean(params[0]);
+    const planId = String(params[1]);
+    const plan = memoryStore.plans.find((p) => p.id === planId);
+    if (plan) {
+      plan.is_active = isActive;
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: plan ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (plan ? [plan] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: UPDATE hosting_plans general
+  if (q.startsWith('UPDATE hosting_plans') && q.includes('SET name = $1')) {
+    const name = String(params[0]);
+    const desc = String(params[1]);
+    const price = Number(params[2]);
+    const ram = Number(params[3]);
+    const cpu = Number(params[4]);
+    const disk = Number(params[5]);
+    const id = String(params[6]);
+    const plan = memoryStore.plans.find((p) => p.id === id);
+    if (plan) {
+      plan.name = name;
+      plan.description = desc;
+      plan.price_monthly = price;
+      plan.ram_mb = ram;
+      plan.cpu_cores = cpu;
+      plan.disk_mb = disk;
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: plan ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (plan ? [plan] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: DELETE FROM host_domains WHERE id = $1
+  if (q.startsWith('DELETE FROM host_domains WHERE id = $1')) {
+    const domainId = String(params[0]);
+    const idx = memoryStore.hostDomains.findIndex((d) => d.id === domainId);
+    let deleted: MemoryHostDomain | undefined;
+    if (idx !== -1) {
+      deleted = memoryStore.hostDomains.splice(idx, 1)[0];
+    }
+    return {
+      command: 'DELETE',
+      rowCount: deleted ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (deleted ? [deleted] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: INSERT INTO audit_logs
+  if (q.startsWith('INSERT INTO audit_logs')) {
+    const id = crypto.randomUUID();
+    const actorId = String(params[0]);
+    const actorEmail = String(params[1]);
+    const action = String(params[2]);
+    const targetType = String(params[3]);
+    const targetId = params[4] ? String(params[4]) : null;
+    const details = params[5] ? (typeof params[5] === 'string' ? JSON.parse(params[5]) : params[5]) : null;
+    const ip = params[6] ? String(params[6]) : null;
+    const entry: MemoryAuditLog = {
+      id,
+      actor_id: actorId,
+      actor_email: actorEmail,
+      action,
+      target_type: targetType,
+      target_id: targetId,
+      details,
+      ip_address: ip,
+      created_at: new Date(),
+    };
+    memoryStore.auditLogs.unshift(entry);
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [entry] as unknown as R[],
+    };
+  }
+
+  // Admin: SELECT COUNT(*) FROM audit_logs
+  if (q.includes('COUNT(*)') && q.includes('FROM audit_logs')) {
+    let filtered = [...memoryStore.auditLogs];
+    if (params.length > 0) {
+      params.forEach((param) => {
+        const pStr = String(param).toLowerCase();
+        if (pStr.startsWith('%') && pStr.endsWith('%')) {
+          const raw = pStr.slice(1, -1);
+          filtered = filtered.filter(
+            (log) =>
+              log.action.toLowerCase().includes(raw) ||
+              log.actor_email.toLowerCase().includes(raw) ||
+              log.target_type.toLowerCase().includes(raw)
+          );
+        } else if (pStr.length > 0) {
+          filtered = filtered.filter(
+            (log) =>
+              log.action.toLowerCase() === pStr ||
+              log.target_type.toLowerCase() === pStr ||
+              log.actor_id === param
+          );
+        }
+      });
+    }
+    return {
+      command: 'SELECT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [{ count: filtered.length }] as unknown as R[],
+    };
+  }
+
+  // Admin: SELECT ... FROM audit_logs
+  if (q.includes('FROM audit_logs') && !q.includes('COUNT(*)')) {
+    let filtered = [...memoryStore.auditLogs];
+    if (params.length > 0) {
+      params.forEach((param) => {
+        if (typeof param === 'number') return;
+        const pStr = String(param).toLowerCase();
+        if (pStr.startsWith('%') && pStr.endsWith('%')) {
+          const raw = pStr.slice(1, -1);
+          filtered = filtered.filter(
+            (log) =>
+              log.action.toLowerCase().includes(raw) ||
+              log.actor_email.toLowerCase().includes(raw) ||
+              log.target_type.toLowerCase().includes(raw)
+          );
+        } else if (pStr.length > 0) {
+          filtered = filtered.filter(
+            (log) =>
+              log.action.toLowerCase() === pStr ||
+              log.target_type.toLowerCase() === pStr ||
+              log.actor_id === param
+          );
+        }
+      });
+    }
+
+    filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const limitMatch = q.match(/LIMIT\s+(\$?\d+)/i);
+    const offsetMatch = q.match(/OFFSET\s+(\$?\d+)/i);
+    let limit = 50;
+    let offset = 0;
+
+    if (limitMatch) {
+      if (limitMatch[1].startsWith('$')) {
+        const paramIdx = parseInt(limitMatch[1].slice(1), 10) - 1;
+        if (typeof params[paramIdx] === 'number') limit = params[paramIdx] as number;
+      } else {
+        limit = parseInt(limitMatch[1], 10);
+      }
+    }
+
+    if (offsetMatch) {
+      if (offsetMatch[1].startsWith('$')) {
+        const paramIdx = parseInt(offsetMatch[1].slice(1), 10) - 1;
+        if (typeof params[paramIdx] === 'number') offset = params[paramIdx] as number;
+      } else {
+        offset = parseInt(offsetMatch[1], 10);
+      }
+    }
+
+    const paged = filtered.slice(offset, offset + limit);
+    return {
+      command: 'SELECT',
+      rowCount: paged.length,
+      oid: 0,
+      fields: [],
+      rows: paged as unknown as R[],
+    };
+  }
+
+  // Admin: SELECT FROM system_settings
+  if (q.includes('FROM system_settings')) {
+    let items = [...memoryStore.systemSettings];
+    if (q.includes('WHERE key = $1')) {
+      const key = String(params[0]);
+      items = items.filter((s) => s.key === key);
+    }
+    return {
+      command: 'SELECT',
+      rowCount: items.length,
+      oid: 0,
+      fields: [],
+      rows: items as unknown as R[],
+    };
+  }
+
+  // Admin: UPDATE system_settings SET value = $1 ... WHERE key = $2
+  if (q.startsWith('UPDATE system_settings') && q.includes('SET value = $1')) {
+    const value = String(params[0]);
+    const key = String(params[1]);
+    const setting = memoryStore.systemSettings.find((s) => s.key === key);
+    if (setting) {
+      setting.value = value;
+      setting.updated_at = new Date();
+    } else {
+      memoryStore.systemSettings.push({
+        key,
+        value,
+        description: '',
+        is_secret: false,
+        updated_at: new Date(),
+      });
+    }
+    return {
+      command: 'UPDATE',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: (setting ? [setting] : []) as unknown as R[],
+    };
+  }
+
+  // Admin: SUM(amount) FROM billing_invoices
+  if (q.includes('SUM(amount)') && q.includes('FROM billing_invoices')) {
+    const paidInvoices = memoryStore.invoices.filter((inv) => inv.status === 'PAID');
+    const total = paidInvoices.reduce((sum, inv) => sum + Number(inv.amount), 0);
+    return {
+      command: 'SELECT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [{ sum: total }] as unknown as R[],
+    };
+  }
+
+  // Admin: COUNT(*) FROM hosting_nodes WHERE status = $1
+  if (q.includes('COUNT(*)') && q.includes('FROM hosting_nodes')) {
+    let filtered = [...memoryStore.nodes];
+    if (q.includes('WHERE status = $1')) {
+      const status = String(params[0]).toUpperCase();
+      filtered = filtered.filter((n) => n.status.toUpperCase() === status);
+    }
+    return {
+      command: 'SELECT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [{ count: filtered.length }] as unknown as R[],
+    };
+  }
 
   // Default fallback for SELECT 1 health
   if (q.includes('SELECT 1 AS health') || q.includes('SELECT 1')) {

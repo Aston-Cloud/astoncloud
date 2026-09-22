@@ -4,6 +4,8 @@ import { sendError } from '../utils/response.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 
+import { ZodError } from 'zod';
+
 export const errorHandler: ErrorRequestHandler = (
   err: Error,
   _req: Request,
@@ -15,6 +17,15 @@ export const errorHandler: ErrorRequestHandler = (
       logger.error({ err, details: err.details }, `Operational error: ${err.message}`);
     }
     sendError(res, err.message, err.statusCode, err.details, err.name);
+    return;
+  }
+
+  // Handle validation error from Zod
+  if (err instanceof ZodError || err.name === 'ZodError') {
+    const zodErr = err as ZodError;
+    const firstIssue = zodErr.issues?.[0];
+    const message = firstIssue ? `${firstIssue.path.join('.')}: ${firstIssue.message}` : 'Dữ liệu đầu vào không hợp lệ';
+    sendError(res, message, 400, zodErr.issues, 'ValidationError');
     return;
   }
 

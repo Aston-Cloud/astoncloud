@@ -272,6 +272,7 @@ export interface SupportTicket {
 }
 
 export interface UserProfile {
+  id?: string;
   name: string;
   email: string;
   username: string;
@@ -293,3 +294,75 @@ export interface NotificationItem {
   type: 'info' | 'success' | 'warning' | 'alert';
   link?: string;
 }
+
+// Milestone 14: Admin Panel Types
+export interface AdminDashboardStats {
+  totalUsers: number;
+  activeUsers: number;
+  suspendedUsers: number;
+  totalHosts: number;
+  runningHosts: number;
+  stoppedHosts: number;
+  errorHosts: number;
+  totalNodes: number;
+  healthyNodes: number;
+  activeSubscriptions: number;
+  totalRevenue: number;
+  pendingInvoices: number;
+  totalBackups: number;
+  totalDomains: number;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'USER' | 'ADMIN' | string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | string;
+  createdAt: string;
+  updatedAt: string;
+  hostCount?: number;
+  subscriptionStatus?: string;
+  hosts?: any[];
+  subscriptions?: any[];
+}
+
+export interface AdminNode {
+  id: string;
+  name: string;
+  ipAddress: string;
+  region: string;
+  status: 'ONLINE' | 'OFFLINE' | 'MAINTENANCE' | 'DRAINING' | string;
+  cpuTotalCores: number;
+  cpuUsedCores: number;
+  ramTotalMb: number;
+  ramUsedMb: number;
+  diskTotalGb: number;
+  diskUsedGb: number;
+  hostCount: number;
+  isMock: boolean;
+  agentVersion: string;
+  lastHeartbeatAt: string;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actorId: string;
+  actorEmail: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  details: Record<string, any>;
+  ipAddress: string;
+  createdAt: string;
+}
+
+export interface AdminSystemSettings {
+  maintenanceMode: boolean;
+  registrationEnabled: boolean;
+  maxHostsPerUser: number;
+  mockAgentMode: boolean;
+  defaultPlanId: string;
+  notificationBanner: string;
+}
+

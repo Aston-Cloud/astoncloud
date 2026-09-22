@@ -9,8 +9,7 @@ import { hostsRouter } from '../modules/hosts/hosts.routes.js';
 import { domainsRouter } from '../modules/domains/domains.routes.js';
 import { backupsRouter } from '../modules/backups/backups.routes.js';
 import { billingRouter } from '../modules/billing/billing.routes.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
-import { sendSuccess } from '../utils/response.js';
+import { adminRouter } from '../modules/admin/admin.routes.js';
 
 export const apiRouter = Router();
 
@@ -44,11 +43,6 @@ apiRouter.use('/backups', backupsRouter);
 // 10. Billing & Subscriptions: /api/v1/billing
 apiRouter.use('/billing', billingRouter);
 
-// 9. Admin preview endpoint (for Admin Authorization & Isolation verification)
-apiRouter.get('/admin/stats', requireAuth, requireRole('ADMIN'), (_req, res) => {
-  sendSuccess(res, {
-    system: 'Aston Cloud Admin Panel API',
-    authorizedRole: 'ADMIN',
-    clusterStatus: 'operational',
-  });
-});
+// 11. Admin Panel & Controls: /api/v1/admin/*
+apiRouter.use('/admin', adminRouter);
+
