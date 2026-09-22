@@ -77,6 +77,15 @@ export interface MemoryHost {
   updated_at: Date;
 }
 
+export interface MemoryHostEnvVariable {
+  id: string;
+  host_id: string;
+  key: string;
+  encrypted_value: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface MemoryUser {
   id: string;
   email: string;
@@ -265,6 +274,7 @@ class MemoryStore {
   ];
 
   public hosts: MemoryHost[] = [];
+  public hostEnvVariables: MemoryHostEnvVariable[] = [];
 }
 
 export const memoryStore = new MemoryStore();
@@ -804,6 +814,8 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     const hostId = String(params[0]);
     const prevLen = memoryStore.hosts.length;
     memoryStore.hosts = memoryStore.hosts.filter((h) => h.id !== hostId);
+    // Cascade delete related host environment variables
+    memoryStore.hostEnvVariables = memoryStore.hostEnvVariables.filter((v) => v.host_id !== hostId);
     const deleted = prevLen > memoryStore.hosts.length;
     return {
       command: 'DELETE',
@@ -811,6 +823,191 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       oid: 0,
       fields: [],
       rows: [],
+    };
+  }
+
+  // ==========================================
+  // HOST ENVIRONMENT VARIABLES (MILESTONE 9)
+  // ==========================================
+
+  // 20. SELECT FROM host_env_variables
+  if (q.startsWith('SELECT') && q.includes('FROM host_env_variables')) {
+    // 20a. SELECT * FROM host_env_variables WHERE id = $1 AND host_id = $2
+    if (q.includes('WHERE id = $1 AND host_id = $2')) {
+      const varId = String(params[0]);
+      const hostId = String(params[1]);
+      const item = memoryStore.hostEnvVariables.find((v) => v.id === varId && v.host_id === hostId);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 20b. SELECT * FROM host_env_variables WHERE host_id = $1 AND key = $2
+    if (q.includes('WHERE host_id = $1 AND key = $2')) {
+      const hostId = String(params[0]);
+      const key = String(params[1]).trim().toUpperCase();
+      const item = memoryStore.hostEnvVariables.find((v) => v.host_id === hostId && v.key.toUpperCase() === key);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 20c. SELECT * FROM host_env_variables WHERE host_id = $1
+    if (q.includes('WHERE host_id = $1')) {
+      const hostId = String(params[0]);
+      const items = memoryStore.hostEnvVariables
+        .filter((v) => v.host_id === hostId)
+        .sort((a, b) => a.key.localeCompare(b.key));
+      return {
+        command: 'SELECT',
+        rowCount: items.length,
+        oid: 0,
+        fields: [],
+        rows: items as unknown as R[],
+      };
+    }
+
+    // 20d. SELECT * FROM host_env_variables WHERE id = $1
+    if (q.includes('WHERE id = $1')) {
+      const varId = String(params[0]);
+      const item = memoryStore.hostEnvVariables.find((v) => v.id === varId);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+  }
+
+  // 21. INSERT INTO host_env_variables
+  if (q.startsWith('INSERT INTO host_env_variables')) {
+    const hostId = String(params[0]);
+    const key = String(params[1]).trim().toUpperCase();
+    const encryptedValue = String(params[2]);
+
+    const existing = memoryStore.hostEnvVariables.find(
+      (v) => v.host_id === hostId && v.key.toUpperCase() === key
+    );
+    if (existing) {
+      const err: any = new Error(`duplicate key value violates unique constraint "uq_host_env_variables_key"`);
+      err.code = '23505';
+      throw err;
+    }
+
+    const newVar: MemoryHostEnvVariable = {
+      id: `env-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      host_id: hostId,
+      key,
+      encrypted_value: encryptedValue,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.hostEnvVariables.push(newVar);
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newVar] as unknown as R[],
+    };
+  }
+
+  // 22. UPDATE host_env_variables
+  if (q.startsWith('UPDATE host_env_variables')) {
+    // Determine query format
+    // UPDATE host_env_variables SET key = $1, encrypted_value = $2, updated_at = NOW() WHERE id = $3 AND host_id = $4 RETURNING *
+    // Or SET encrypted_value = $1, updated_at = NOW() WHERE id = $2 AND host_id = $3
+    let item: MemoryHostEnvVariable | undefined;
+
+    if (q.includes('SET key = $1, encrypted_value = $2')) {
+      const newKey = String(params[0]).trim().toUpperCase();
+      const newEncryptedVal = String(params[1]);
+      const varId = String(params[2]);
+      const hostId = String(params[3]);
+
+      item = memoryStore.hostEnvVariables.find((v) => v.id === varId && v.host_id === hostId);
+      if (item) {
+        // Check uniqueness if key changed
+        if (item.key.toUpperCase() !== newKey) {
+          const duplicate = memoryStore.hostEnvVariables.find(
+            (v) => v.host_id === hostId && v.key.toUpperCase() === newKey && v.id !== varId
+          );
+          if (duplicate) {
+            const err: any = new Error(`duplicate key value violates unique constraint "uq_host_env_variables_key"`);
+            err.code = '23505';
+            throw err;
+          }
+        }
+        item.key = newKey;
+        item.encrypted_value = newEncryptedVal;
+        item.updated_at = new Date();
+      }
+    } else if (q.includes('SET key = $1')) {
+      const newKey = String(params[0]).trim().toUpperCase();
+      const varId = String(params[1]);
+      const hostId = String(params[2]);
+
+      item = memoryStore.hostEnvVariables.find((v) => v.id === varId && v.host_id === hostId);
+      if (item) {
+        if (item.key.toUpperCase() !== newKey) {
+          const duplicate = memoryStore.hostEnvVariables.find(
+            (v) => v.host_id === hostId && v.key.toUpperCase() === newKey && v.id !== varId
+          );
+          if (duplicate) {
+            const err: any = new Error(`duplicate key value violates unique constraint "uq_host_env_variables_key"`);
+            err.code = '23505';
+            throw err;
+          }
+        }
+        item.key = newKey;
+        item.updated_at = new Date();
+      }
+    } else if (q.includes('SET encrypted_value = $1')) {
+      const newEncryptedVal = String(params[0]);
+      const varId = String(params[1]);
+      const hostId = String(params[2]);
+
+      item = memoryStore.hostEnvVariables.find((v) => v.id === varId && v.host_id === hostId);
+      if (item) {
+        item.encrypted_value = newEncryptedVal;
+        item.updated_at = new Date();
+      }
+    }
+
+    return {
+      command: 'UPDATE',
+      rowCount: item ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (item ? [item] : []) as unknown as R[],
+    };
+  }
+
+  // 23. DELETE FROM host_env_variables
+  if (q.startsWith('DELETE FROM host_env_variables')) {
+    const varId = String(params[0]);
+    const hostId = params[1] !== undefined ? String(params[1]) : undefined;
+    const prevLen = memoryStore.hostEnvVariables.length;
+    const deletedItem = memoryStore.hostEnvVariables.find((v) => v.id === varId && (!hostId || v.host_id === hostId));
+    memoryStore.hostEnvVariables = memoryStore.hostEnvVariables.filter((v) => !(v.id === varId && (!hostId || v.host_id === hostId)));
+    const deleted = prevLen > memoryStore.hostEnvVariables.length;
+    return {
+      command: 'DELETE',
+      rowCount: deleted ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (deletedItem ? [deletedItem] : []) as unknown as R[],
     };
   }
 

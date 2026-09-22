@@ -81,6 +81,16 @@ export interface EnvVariable {
   updatedAt: string;
 }
 
+export interface HostEnvVariable {
+  id: string;
+  hostId: string;
+  key: string;
+  hasValue: boolean;
+  maskedValue: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DomainRecord {
   id: string;
   domain: string;

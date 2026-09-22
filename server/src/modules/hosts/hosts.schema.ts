@@ -110,3 +110,67 @@ export type WriteFileInput = z.infer<typeof writeFileSchema>;
 export type CreateDirectoryInput = z.infer<typeof createDirectorySchema>;
 export type RenameFileInput = z.infer<typeof renameFileSchema>;
 export type UploadFileInput = z.infer<typeof uploadFileSchema>;
+
+// ==========================================
+// HOST ENVIRONMENT VARIABLES SCHEMAS (MILESTONE 9)
+// ==========================================
+
+const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]{0,127}$/;
+
+export const createEnvVariableSchema = z.object({
+  key: z
+    .string({ required_error: 'Tên biến môi trường (key) là bắt buộc' })
+    .trim()
+    .transform((k) => k.toUpperCase())
+    .refine((k) => k.length > 0, 'Tên biến môi trường không được để trống')
+    .refine(
+      (k) => ENV_KEY_REGEX.test(k),
+      'Tên biến môi trường chỉ được chứa chữ in hoa (A-Z), chữ số (0-9) và dấu gạch dưới (_), không bắt đầu bằng số'
+    )
+    .refine(
+      (k) => k !== 'PORT',
+      "Biến môi trường 'PORT' được quản lý tự động bởi hạ tầng cụm máy chủ và không thể thay đổi thủ công"
+    ),
+  value: z
+    .string({ required_error: 'Giá trị biến môi trường (value) là bắt buộc' })
+    .refine(
+      (v) => Buffer.byteLength(v, 'utf8') <= 32768,
+      'Dung lượng giá trị biến môi trường không được vượt quá 32,768 bytes (32KB)'
+    ),
+});
+
+export const updateEnvVariableSchema = z
+  .object({
+    key: z
+      .string()
+      .trim()
+      .transform((k) => k.toUpperCase())
+      .refine((k) => k.length > 0, 'Tên biến môi trường không được để trống')
+      .refine(
+        (k) => ENV_KEY_REGEX.test(k),
+        'Tên biến môi trường chỉ được chứa chữ in hoa (A-Z), chữ số (0-9) và dấu gạch dưới (_), không bắt đầu bằng số'
+      )
+      .refine(
+        (k) => k !== 'PORT',
+        "Biến môi trường 'PORT' được quản lý tự động bởi hạ tầng cụm máy chủ và không thể thay đổi thủ công"
+      )
+      .optional(),
+    value: z
+      .string()
+      .refine(
+        (v) => Buffer.byteLength(v, 'utf8') <= 32768,
+        'Dung lượng giá trị biến môi trường không được vượt quá 32,768 bytes (32KB)'
+      )
+      .optional(),
+  })
+  .refine((data) => data.key !== undefined || data.value !== undefined, {
+    message: 'Phải cung cấp ít nhất một trường key hoặc value để cập nhật',
+  });
+
+export const envVariableParamsSchema = z.object({
+  id: z.string({ required_error: 'hostId là bắt buộc' }),
+  variableId: z.string({ required_error: 'variableId là bắt buộc' }),
+});
+
+export type CreateEnvVariableInput = z.infer<typeof createEnvVariableSchema>;
+export type UpdateEnvVariableInput = z.infer<typeof updateEnvVariableSchema>;

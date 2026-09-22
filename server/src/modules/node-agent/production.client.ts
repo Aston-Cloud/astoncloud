@@ -324,4 +324,30 @@ export class ProductionNodeAgentClient implements INodeAgentClient {
       mimeType: res.headers.get('content-type') || 'application/octet-stream',
     };
   }
+
+  // ==========================================
+  // HOST ENVIRONMENT VARIABLES (MILESTONE 9)
+  // ==========================================
+
+  public async setEnvironmentVariables(
+    node: NodeContext,
+    hostId: string,
+    variables: Record<string, string>
+  ): Promise<{ count: number; keys: string[] }> {
+    return this.request<{ count: number; keys: string[] }>(node, `/hosts/${hostId}/env`, {
+      method: 'POST',
+      body: { variables },
+    });
+  }
+
+  public async removeEnvironmentVariable(
+    node: NodeContext,
+    hostId: string,
+    key: string
+  ): Promise<{ key: string; removed: boolean }> {
+    const encodedKey = encodeURIComponent(key);
+    return this.request<{ key: string; removed: boolean }>(node, `/hosts/${hostId}/env/${encodedKey}`, {
+      method: 'DELETE',
+    });
+  }
 }

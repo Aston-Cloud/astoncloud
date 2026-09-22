@@ -133,4 +133,16 @@ export interface INodeAgentClient {
   renameFile(node: NodeContext, hostId: string, fromPath: string, toPath: string): Promise<{ from: string; to: string }>;
   uploadFile(node: NodeContext, hostId: string, options: UploadFileOptions): Promise<{ path: string; size: number }>;
   downloadFile(node: NodeContext, hostId: string, filePath: string): Promise<FileDownloadStream>;
+
+  // Host Environment Variables Management
+  setEnvironmentVariables(
+    node: NodeContext,
+    hostId: string,
+    variables: Record<string, string>
+  ): Promise<{ count: number; keys: string[] }>;
+  removeEnvironmentVariable(
+    node: NodeContext,
+    hostId: string,
+    key: string
+  ): Promise<{ key: string; removed: boolean }>;
 }

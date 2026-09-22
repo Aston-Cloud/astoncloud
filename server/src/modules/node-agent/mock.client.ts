@@ -732,4 +732,70 @@ export class LocalMockNodeAgentClient implements INodeAgentClient {
       size: stat.size,
     };
   }
+
+  // ==========================================
+  // HOST ENVIRONMENT VARIABLES (MILESTONE 9)
+  // ==========================================
+
+  public async setEnvironmentVariables(
+    node: NodeContext,
+    hostId: string,
+    variables: Record<string, string>
+  ): Promise<{ count: number; keys: string[] }> {
+    logger.info(
+      { nodeId: node.id, hostId, count: Object.keys(variables).length },
+      '[LocalMockNodeAgentClient] Setting container environment variables'
+    );
+
+    const record = this.containers.get(hostId);
+    if (!record) {
+      throw new NotFoundError(`Container cho host "${hostId}" không tồn tại trên mock node`);
+    }
+
+    const keys: string[] = [];
+    for (const [key, val] of Object.entries(variables)) {
+      record.env[key] = val;
+      keys.push(key);
+    }
+
+    return {
+      count: keys.length,
+      keys,
+    };
+  }
+
+  public async removeEnvironmentVariable(
+    node: NodeContext,
+    hostId: string,
+    key: string
+  ): Promise<{ key: string; removed: boolean }> {
+    logger.info(
+      { nodeId: node.id, hostId, key },
+      '[LocalMockNodeAgentClient] Removing container environment variable'
+    );
+
+    const record = this.containers.get(hostId);
+    if (!record) {
+      throw new NotFoundError(`Container cho host "${hostId}" không tồn tại trên mock node`);
+    }
+
+    const exists = key in record.env;
+    delete record.env[key];
+
+    return {
+      key,
+      removed: exists,
+    };
+  }
+
+  /**
+   * Helper method for verification and tests (inspects mock container environment)
+   */
+  public getContainerEnvironment(hostId: string): Record<string, string> {
+    const record = this.containers.get(hostId);
+    if (!record) {
+      throw new NotFoundError(`Container cho host "${hostId}" không tồn tại trên mock node`);
+    }
+    return { ...record.env };
+  }
 }

@@ -13,6 +13,11 @@ import {
 } from '../node-agent/node-agent.interface.js';
 import { BadRequestError, NotFoundError, AppError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
+import {
+  encryptEnvValue,
+  decryptEnvValue,
+  maskEnvValue,
+} from '../../utils/encryption.js';
 import type {
   CreateHostInput,
   UpdateHostInput,
@@ -20,6 +25,8 @@ import type {
   HostLogsQuery,
   WriteFileInput,
   UploadFileInput,
+  CreateEnvVariableInput,
+  UpdateEnvVariableInput,
 } from './hosts.schema.js';
 
 export type HostStatus =
@@ -99,6 +106,25 @@ export interface FormattedHost {
     name: string;
     region: string;
   };
+}
+
+export interface HostEnvVariableRow {
+  id: string;
+  host_id: string;
+  key: string;
+  encrypted_value: string;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+export interface FormattedHostEnvVariable {
+  id: string;
+  hostId: string;
+  key: string;
+  hasValue: boolean;
+  maskedValue: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export function formatHost(row: HostRow): FormattedHost {
@@ -377,6 +403,14 @@ export class HostsService {
     const agentClient = getNodeAgentClient();
     let createdContainerId: string | null = null;
 
+    // Load any pre-configured decrypted host environment variables
+    const customEnv = await this.loadDecryptedHostEnvironment(hostRecord.id);
+    const containerEnv: Record<string, string> = {
+      NODE_ENV: 'production',
+      ...customEnv,
+      PORT: String(allocatedPort), // PORT is strictly platform-controlled
+    };
+
     try {
       logger.info({ hostId: hostRecord.id, nodeId: reservedNode.id }, 'CONTAINER_CREATE_STARTED');
 
@@ -391,10 +425,7 @@ export class HostsService {
           diskLimitMb: plan.diskMb,
           pidsLimit: 200,
         },
-        env: {
-          NODE_ENV: 'production',
-          PORT: String(allocatedPort),
-        },
+        env: containerEnv,
       });
 
       createdContainerId = containerResult.containerId;
@@ -537,6 +568,18 @@ export class HostsService {
         throw new BadRequestError('Máy chủ hiện đang hoạt động (RUNNING)');
       }
 
+      // Sync latest decrypted environment variables before starting container
+      try {
+        const decryptedEnv = await this.loadDecryptedHostEnvironment(hostId);
+        if (host.port) {
+          decryptedEnv.PORT = String(host.port);
+        }
+        decryptedEnv.NODE_ENV = 'production';
+        await agentClient.setEnvironmentVariables(nodeContext, hostId, decryptedEnv);
+      } catch (envErr: any) {
+        logger.warn({ hostId, err: envErr.message }, 'Failed to sync container environment before start');
+      }
+
       await agentClient.startContainer(nodeContext, containerTarget);
       await query(`UPDATE hosts SET status = $1, updated_at = NOW() WHERE id = $2`, ['RUNNING', hostId]);
       host.status = 'RUNNING';
@@ -567,6 +610,18 @@ export class HostsService {
     }
 
     if (input.action === 'restart') {
+      // Sync latest decrypted environment variables before restarting container
+      try {
+        const decryptedEnv = await this.loadDecryptedHostEnvironment(hostId);
+        if (host.port) {
+          decryptedEnv.PORT = String(host.port);
+        }
+        decryptedEnv.NODE_ENV = 'production';
+        await agentClient.setEnvironmentVariables(nodeContext, hostId, decryptedEnv);
+      } catch (envErr: any) {
+        logger.warn({ hostId, err: envErr.message }, 'Failed to sync container environment before restart');
+      }
+
       await agentClient.restartContainer(nodeContext, containerTarget);
       await query(`UPDATE hosts SET status = $1, updated_at = NOW() WHERE id = $2`, ['RUNNING', hostId]);
       host.status = 'RUNNING';
@@ -915,5 +970,318 @@ export class HostsService {
   ): Promise<FileDownloadStream> {
     const { nodeContext, agentClient } = await this.getHostAndNodeForFiles(hostId, userId, role);
     return agentClient.downloadFile(nodeContext, hostId, filePath);
+  }
+
+  // ==========================================
+  // HOST ENVIRONMENT VARIABLES (MILESTONE 9)
+  // ==========================================
+
+  /**
+   * Helper to load and decrypt all environment variables for a host
+   * Used strictly for container provisioning and runtime execution
+   */
+  public static async loadDecryptedHostEnvironment(hostId: string): Promise<Record<string, string>> {
+    const { rows } = await query<HostEnvVariableRow>(
+      `SELECT * FROM host_env_variables WHERE host_id = $1 ORDER BY key ASC`,
+      [hostId]
+    );
+
+    const envMap: Record<string, string> = {};
+    for (const row of rows) {
+      try {
+        envMap[row.key] = decryptEnvValue(row.encrypted_value);
+      } catch (err: any) {
+        logger.error(
+          { hostId, key: row.key, err: err.message },
+          'Failed to decrypt environment variable'
+        );
+      }
+    }
+    return envMap;
+  }
+
+  /**
+   * List environment variables for a host (Values are masked with •••••••• for security)
+   */
+  public static async listHostVariables(
+    hostId: string,
+    userId: string,
+    role: string
+  ): Promise<FormattedHostEnvVariable[]> {
+    // Verify host ownership (IDOR protection)
+    await this.getHostById(hostId, userId, role);
+
+    const { rows } = await query<HostEnvVariableRow>(
+      `SELECT * FROM host_env_variables WHERE host_id = $1 ORDER BY key ASC`,
+      [hostId]
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      hostId: row.host_id,
+      key: row.key,
+      hasValue: true,
+      maskedValue: maskEnvValue(),
+      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    }));
+  }
+
+  /**
+   * Create an encrypted environment variable for a host
+   */
+  public static async createHostVariable(
+    hostId: string,
+    userId: string,
+    role: string,
+    input: CreateEnvVariableInput
+  ): Promise<{ variable: FormattedHostEnvVariable; requiresRestart: boolean }> {
+    const host = await this.getHostById(hostId, userId, role);
+
+    const cleanKey = input.key.trim().toUpperCase();
+    if (cleanKey === 'PORT') {
+      throw new BadRequestError(
+        "Biến môi trường 'PORT' được quản lý tự động bởi hạ tầng cụm máy chủ và không thể thay đổi thủ công"
+      );
+    }
+
+    // Check duplicate key on this host
+    const { rows: existing } = await query<HostEnvVariableRow>(
+      `SELECT * FROM host_env_variables WHERE host_id = $1 AND key = $2 LIMIT 1`,
+      [hostId, cleanKey]
+    );
+    if (existing.length > 0) {
+      throw new AppError(`Biến môi trường với tên "${cleanKey}" đã tồn tại trên máy chủ`, 409);
+    }
+
+    const encryptedVal = encryptEnvValue(input.value);
+
+    const { rows } = await query<HostEnvVariableRow>(
+      `INSERT INTO host_env_variables (host_id, key, encrypted_value, created_at, updated_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       RETURNING *`,
+      [hostId, cleanKey, encryptedVal]
+    );
+
+    const created = rows[0];
+
+    // Safe Audit Logging - never log plaintext value or secret payload
+    logger.info(
+      {
+        event: 'ENV_CREATED',
+        userId,
+        hostId,
+        variableKey: cleanKey,
+        timestamp: new Date().toISOString(),
+      },
+      `[Audit] Biến môi trường "${cleanKey}" được khởi tạo cho host "${hostId}"`
+    );
+
+    // Sync with Node Agent container if host is assigned to a node
+    if (host.nodeId) {
+      try {
+        const nodeContext = await this.getNodeContext(host.nodeId);
+        const agentClient = getNodeAgentClient();
+        await agentClient.setEnvironmentVariables(nodeContext, hostId, {
+          [cleanKey]: input.value,
+        });
+      } catch (agentErr: any) {
+        logger.warn(
+          { hostId, err: agentErr.message },
+          'Failed to sync new environment variable to Node Agent immediately'
+        );
+      }
+    }
+
+    return {
+      variable: {
+        id: created.id,
+        hostId: created.host_id,
+        key: created.key,
+        hasValue: true,
+        maskedValue: maskEnvValue(),
+        createdAt: created.created_at instanceof Date ? created.created_at.toISOString() : String(created.created_at),
+        updatedAt: created.updated_at instanceof Date ? created.updated_at.toISOString() : String(created.updated_at),
+      },
+      requiresRestart: true,
+    };
+  }
+
+  /**
+   * Update an environment variable (key or value)
+   */
+  public static async updateHostVariable(
+    hostId: string,
+    variableId: string,
+    userId: string,
+    role: string,
+    input: UpdateEnvVariableInput
+  ): Promise<{ variable: FormattedHostEnvVariable; requiresRestart: boolean }> {
+    const host = await this.getHostById(hostId, userId, role);
+
+    // Verify variable exists on requested host (IDOR protection)
+    const { rows: existingRows } = await query<HostEnvVariableRow>(
+      `SELECT * FROM host_env_variables WHERE id = $1 AND host_id = $2 LIMIT 1`,
+      [variableId, hostId]
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      throw new NotFoundError('Không tìm thấy biến môi trường được yêu cầu');
+    }
+
+    let targetKey = existing.key;
+    if (input.key !== undefined) {
+      const cleanKey = input.key.trim().toUpperCase();
+      if (cleanKey === 'PORT') {
+        throw new BadRequestError(
+          "Biến môi trường 'PORT' được quản lý tự động bởi hạ tầng cụm máy chủ và không thể thay đổi thủ công"
+        );
+      }
+      if (cleanKey !== existing.key) {
+        const { rows: dupRows } = await query<HostEnvVariableRow>(
+          `SELECT * FROM host_env_variables WHERE host_id = $1 AND key = $2 AND id != $3 LIMIT 1`,
+          [hostId, cleanKey, variableId]
+        );
+        if (dupRows.length > 0) {
+          throw new AppError(`Biến môi trường với tên "${cleanKey}" đã tồn tại trên máy chủ`, 409);
+        }
+      }
+      targetKey = cleanKey;
+    }
+
+    let encryptedVal = existing.encrypted_value;
+    if (input.value !== undefined) {
+      encryptedVal = encryptEnvValue(input.value);
+    }
+
+    let updated: HostEnvVariableRow;
+    if (input.key !== undefined && input.value !== undefined) {
+      const { rows: updatedRows } = await query<HostEnvVariableRow>(
+        `UPDATE host_env_variables 
+         SET key = $1, encrypted_value = $2, updated_at = NOW() 
+         WHERE id = $3 AND host_id = $4 
+         RETURNING *`,
+        [targetKey, encryptedVal, variableId, hostId]
+      );
+      updated = updatedRows[0];
+    } else if (input.key !== undefined) {
+      const { rows: updatedRows } = await query<HostEnvVariableRow>(
+        `UPDATE host_env_variables 
+         SET key = $1, updated_at = NOW() 
+         WHERE id = $2 AND host_id = $3 
+         RETURNING *`,
+        [targetKey, variableId, hostId]
+      );
+      updated = updatedRows[0];
+    } else {
+      const { rows: updatedRows } = await query<HostEnvVariableRow>(
+        `UPDATE host_env_variables 
+         SET encrypted_value = $1, updated_at = NOW() 
+         WHERE id = $2 AND host_id = $3 
+         RETURNING *`,
+        [encryptedVal, variableId, hostId]
+      );
+      updated = updatedRows[0];
+    }
+
+    // Safe Audit Logging
+    logger.info(
+      {
+        event: 'ENV_UPDATED',
+        userId,
+        hostId,
+        variableKey: updated.key,
+        timestamp: new Date().toISOString(),
+      },
+      `[Audit] Biến môi trường "${updated.key}" được cập nhật cho host "${hostId}"`
+    );
+
+    // Sync with Node Agent container if host has node
+    if (host.nodeId) {
+      try {
+        const nodeContext = await this.getNodeContext(host.nodeId);
+        const agentClient = getNodeAgentClient();
+        if (input.key && input.key !== existing.key) {
+          await agentClient.removeEnvironmentVariable(nodeContext, hostId, existing.key).catch(() => {});
+        }
+        const valToSet = input.value !== undefined ? input.value : decryptEnvValue(updated.encrypted_value);
+        await agentClient.setEnvironmentVariables(nodeContext, hostId, {
+          [updated.key]: valToSet,
+        });
+      } catch (agentErr: any) {
+        logger.warn(
+          { hostId, err: agentErr.message },
+          'Failed to sync updated environment variable to Node Agent immediately'
+        );
+      }
+    }
+
+    return {
+      variable: {
+        id: updated.id,
+        hostId: updated.host_id,
+        key: updated.key,
+        hasValue: true,
+        maskedValue: maskEnvValue(),
+        createdAt: updated.created_at instanceof Date ? updated.created_at.toISOString() : String(updated.created_at),
+        updatedAt: updated.updated_at instanceof Date ? updated.updated_at.toISOString() : String(updated.updated_at),
+      },
+      requiresRestart: true,
+    };
+  }
+
+  /**
+   * Delete an environment variable
+   */
+  public static async deleteHostVariable(
+    hostId: string,
+    variableId: string,
+    userId: string,
+    role: string
+  ): Promise<{ success: boolean; message: string; requiresRestart: boolean }> {
+    const host = await this.getHostById(hostId, userId, role);
+
+    const { rows: existingRows } = await query<HostEnvVariableRow>(
+      `SELECT * FROM host_env_variables WHERE id = $1 AND host_id = $2 LIMIT 1`,
+      [variableId, hostId]
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      throw new NotFoundError('Không tìm thấy biến môi trường được yêu cầu');
+    }
+
+    await query(`DELETE FROM host_env_variables WHERE id = $1 AND host_id = $2`, [variableId, hostId]);
+
+    // Safe Audit Logging
+    logger.info(
+      {
+        event: 'ENV_DELETED',
+        userId,
+        hostId,
+        variableKey: existing.key,
+        timestamp: new Date().toISOString(),
+      },
+      `[Audit] Biến môi trường "${existing.key}" đã bị xóa khỏi host "${hostId}"`
+    );
+
+    // Sync with Node Agent container
+    if (host.nodeId) {
+      try {
+        const nodeContext = await this.getNodeContext(host.nodeId);
+        const agentClient = getNodeAgentClient();
+        await agentClient.removeEnvironmentVariable(nodeContext, hostId, existing.key);
+      } catch (agentErr: any) {
+        logger.warn(
+          { hostId, err: agentErr.message },
+          'Failed to remove environment variable from Node Agent'
+        );
+      }
+    }
+
+    return {
+      success: true,
+      message: `Biến môi trường "${existing.key}" đã được xóa thành công.`,
+      requiresRestart: true,
+    };
   }
 }

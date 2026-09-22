@@ -252,4 +252,54 @@ export class HostsController {
       next(err);
     }
   }
+
+  // ==========================================
+  // HOST ENVIRONMENT VARIABLES (MILESTONE 9)
+  // ==========================================
+
+  public static async listVariables(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const variables = await HostsService.listHostVariables(hostId, user.id, user.role);
+      sendSuccess(res, variables);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async createVariable(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const result = await HostsService.createHostVariable(hostId, user.id, user.role, req.body);
+      sendSuccess(res, result, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async updateVariable(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const variableId = req.params.variableId as string;
+      const result = await HostsService.updateHostVariable(hostId, variableId, user.id, user.role, req.body);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async deleteVariable(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = req.user!;
+      const hostId = req.params.id as string;
+      const variableId = req.params.variableId as string;
+      const result = await HostsService.deleteHostVariable(hostId, variableId, user.id, user.role);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }

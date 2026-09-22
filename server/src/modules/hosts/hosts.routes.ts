@@ -14,6 +14,9 @@ import {
   deleteFileQuerySchema,
   renameFileSchema,
   uploadFileSchema,
+  createEnvVariableSchema,
+  updateEnvVariableSchema,
+  envVariableParamsSchema,
 } from './hosts.schema.js';
 
 export const hostsRouter = Router();
@@ -75,3 +78,32 @@ hostsRouter.post('/:id/files/upload', validate({ body: uploadFileSchema }), Host
 
 // GET /api/v1/hosts/:id/files/download - Download file
 hostsRouter.get('/:id/files/download', validate({ query: readFileQuerySchema }), HostsController.downloadFile);
+
+// ==========================================
+// HOST ENVIRONMENT VARIABLES ROUTES (MILESTONE 9)
+// ==========================================
+
+// GET /api/v1/hosts/:id/variables - List host environment variables (values masked)
+hostsRouter.get('/:id/variables', HostsController.listVariables);
+
+// POST /api/v1/hosts/:id/variables - Create an encrypted environment variable
+hostsRouter.post(
+  '/:id/variables',
+  validate({ body: createEnvVariableSchema }),
+  HostsController.createVariable
+);
+
+// PATCH /api/v1/hosts/:id/variables/:variableId - Update variable key or value
+hostsRouter.patch(
+  '/:id/variables/:variableId',
+  validate({ params: envVariableParamsSchema, body: updateEnvVariableSchema }),
+  HostsController.updateVariable
+);
+
+// DELETE /api/v1/hosts/:id/variables/:variableId - Delete variable
+hostsRouter.delete(
+  '/:id/variables/:variableId',
+  validate({ params: envVariableParamsSchema }),
+  HostsController.deleteVariable
+);
+

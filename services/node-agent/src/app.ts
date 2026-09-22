@@ -5,6 +5,7 @@ import { healthRoutes } from './modules/health/health.routes.js';
 import { infoRoutes } from './modules/info/info.routes.js';
 import { containerRoutes } from './modules/containers/containers.routes.js';
 import { fileRoutes } from './modules/files/files.routes.js';
+import { envRoutes } from './modules/env/env.routes.js';
 
 export function buildApp() {
   const app = Fastify({
@@ -73,6 +74,7 @@ export function buildApp() {
   app.register(infoRoutes);
   app.register(containerRoutes);
   app.register(fileRoutes);
+  app.register(envRoutes);
 
   return app;
 }
