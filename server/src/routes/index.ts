@@ -8,6 +8,7 @@ import { nodesRouter } from '../modules/nodes/nodes.routes.js';
 import { hostsRouter } from '../modules/hosts/hosts.routes.js';
 import { domainsRouter } from '../modules/domains/domains.routes.js';
 import { backupsRouter } from '../modules/backups/backups.routes.js';
+import { billingRouter } from '../modules/billing/billing.routes.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendSuccess } from '../utils/response.js';
 
@@ -39,6 +40,9 @@ apiRouter.use('/domains', domainsRouter);
 
 // 9. Host Backups: /api/v1/backups
 apiRouter.use('/backups', backupsRouter);
+
+// 10. Billing & Subscriptions: /api/v1/billing
+apiRouter.use('/billing', billingRouter);
 
 // 9. Admin preview endpoint (for Admin Authorization & Isolation verification)
 apiRouter.get('/admin/stats', requireAuth, requireRole('ADMIN'), (_req, res) => {

@@ -186,11 +186,69 @@ export interface LogEntry {
 
 export interface Invoice {
   id: string;
+  invoiceNumber?: string;
   date: string;
+  dueDate?: string;
+  paidAt?: string | null;
   description: string;
   amount: number;
-  status: 'paid' | 'pending' | 'failed';
-  pdfUrl: string;
+  currency?: string;
+  status: 'paid' | 'pending' | 'failed' | 'DRAFT' | 'OPEN' | 'PAID' | 'VOID' | 'FAILED';
+  pdfUrl?: string;
+}
+
+export interface UserSubscription {
+  id: string;
+  userId: string;
+  planId: string;
+  planName: string;
+  status: 'PENDING' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'EXPIRED' | 'SUSPENDED' | string;
+  billingInterval: 'MONTHLY' | 'YEARLY';
+  price: number;
+  currency: string;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+  cancelAtPeriodEnd: boolean;
+  createdAt: string;
+  updatedAt: string;
+  plan?: {
+    id: string;
+    name: string;
+    cpu: string;
+    ram: string;
+    disk: string;
+    priceMonthly: number;
+    priceYearly: number;
+  };
+}
+
+export interface InvoiceDetail {
+  id: string;
+  userId: string;
+  subscriptionId?: string | null;
+  invoiceNumber: string;
+  amount: number;
+  currency: string;
+  status: 'DRAFT' | 'OPEN' | 'PAID' | 'VOID' | 'FAILED' | string;
+  description: string;
+  invoiceDate: string;
+  dueDate: string;
+  paidAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CheckoutResponse {
+  checkoutId: string;
+  checkoutUrl: string;
+  provider: string;
+  providerPaymentId: string;
+  amount: number;
+  currency: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  expiresAt: string;
+  isMock: boolean;
 }
 
 export interface SupportTicketMessage {

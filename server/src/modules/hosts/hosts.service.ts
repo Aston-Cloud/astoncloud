@@ -270,7 +270,7 @@ export class HostsService {
    * 9. Update Host status to RUNNING & record container_id
    * 10. Automatic rollback & cleanup on any failure
    */
-  public static async createHost(userId: string, input: CreateHostInput): Promise<FormattedHost> {
+  public static async createHost(userId: string, input: CreateHostInput, role = 'USER'): Promise<FormattedHost> {
     const cleanRuntime = input.runtimeId.toLowerCase().trim();
     const cleanVersion = input.runtimeVersion.trim();
     const cleanPlanId = input.planId.toLowerCase().trim();
@@ -315,6 +315,71 @@ export class HostsService {
     const plan = await PlansService.getPlanById(cleanPlanId);
     if (!plan) {
       throw new BadRequestError(`Gói dịch vụ "${input.planId}" không tồn tại hoặc đã ngừng cung cấp`);
+    }
+
+    // 3b. Enforce Subscription & Plan Access Limits
+    if (role !== 'ADMIN') {
+      const { rows: subRows } = await query<{
+        plan_id: string;
+        status: string;
+        cancel_at_period_end: boolean;
+      }>(
+        `SELECT plan_id, status, cancel_at_period_end 
+         FROM user_subscriptions 
+         WHERE user_id = $1 AND status = 'ACTIVE' 
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId]
+      );
+
+      const activeSub = subRows[0];
+
+      // Count existing active hosts for user
+      const { rows: countRows } = await query<{ count: string | number }>(
+        `SELECT COUNT(*) as count FROM hosts WHERE user_id = $1 AND status NOT IN ('DELETING')`,
+        [userId]
+      );
+      const existingHostCount = Number(countRows[0]?.count || 0);
+
+      // Plan tier ranking: starter (1) < developer (2) < pro (3)
+      const tierRank: Record<string, number> = {
+        starter: 1,
+        developer: 2,
+        pro: 3,
+      };
+
+      if (activeSub) {
+        const subTier = tierRank[activeSub.plan_id] || 1;
+        const requestedTier = tierRank[cleanPlanId] || 1;
+
+        if (requestedTier > subTier) {
+          throw new BadRequestError(
+            `Gói đăng ký hiện tại (${activeSub.plan_id.toUpperCase()}) không hỗ trợ tạo máy chủ gói "${plan.name}". Vui lòng nâng cấp gói đăng ký.`
+          );
+        }
+
+        // Quota limits: starter (2 hosts), developer (5 hosts), pro (10 hosts)
+        const maxHosts = activeSub.plan_id === 'pro' ? 10 : activeSub.plan_id === 'developer' ? 5 : 2;
+        if (existingHostCount >= maxHosts) {
+          throw new BadRequestError(
+            `Bạn đã đạt giới hạn tối đa ${maxHosts} máy chủ cho gói ${activeSub.plan_id.toUpperCase()}. Vui lòng nâng cấp gói hoặc xóa bớt máy chủ cũ.`
+          );
+        }
+      } else {
+        // Free / Dev trial policy:
+        // Users without an active subscription are permitted 1 free/dev Starter host.
+        // Attempting to create a Developer or Pro host without a subscription is rejected.
+        if (cleanPlanId !== 'starter') {
+          throw new BadRequestError(
+            `Yêu cầu đăng ký gói dịch vụ để tạo máy chủ "${plan.name}". Tài khoản miễn phí chỉ được tạo gói Starter.`
+          );
+        }
+
+        if (existingHostCount >= 1) {
+          throw new BadRequestError(
+            'Bạn đã sử dụng hết lượt máy chủ dùng thử miễn phí (1 máy chủ). Vui lòng đăng ký gói dịch vụ để tạo thêm máy chủ.'
+          );
+        }
+      }
     }
 
     logger.info(

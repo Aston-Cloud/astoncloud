@@ -27,7 +27,7 @@ export class HostsController {
   public static async createHost(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const user = req.user!;
-      const host = await HostsService.createHost(user.id, req.body);
+      const host = await HostsService.createHost(user.id, req.body, user.role);
       sendSuccess(res, { host, message: 'Khởi tạo máy chủ thành công' }, 201);
     } catch (err) {
       next(err);

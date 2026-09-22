@@ -12,6 +12,8 @@ import {
   UserProfile,
   NotificationItem,
   RuntimeType,
+  UserSubscription,
+  CheckoutResponse,
 } from '../types';
 import {
   INITIAL_HOSTS,
@@ -66,8 +68,14 @@ interface AppStateContextType {
   logs: Record<string, LogEntry[]>;
   clearLogs: (hostId: string) => void;
 
-  // Billing & Invoices
+  // Billing & Subscriptions
   invoices: Invoice[];
+  userSubscription: UserSubscription | null;
+  refreshBilling: () => Promise<void>;
+  createCheckout: (planId: string, billingInterval?: 'MONTHLY' | 'YEARLY') => Promise<CheckoutResponse>;
+  simulatePayment: (checkoutId: string, outcome?: 'success' | 'failure', reason?: string) => Promise<any>;
+  cancelSubscription: () => Promise<void>;
+  reactivateSubscription: () => Promise<void>;
   userProfile: UserProfile;
   updateUserProfile: (profile: Partial<UserProfile>) => void;
   addBalance: (amount: number) => void;
@@ -130,7 +138,8 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return saved ? JSON.parse(saved) : INITIAL_LOGS;
   });
 
-  const [invoices] = useState<Invoice[]>(INITIAL_INVOICES);
+  const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
+  const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER);
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
@@ -252,6 +261,116 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const fetchBillingData = async (token: string) => {
+    try {
+      const subRes = await fetch('/api/v1/billing/subscription', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const subData = await subRes.json();
+      if (subData.success) {
+        setUserSubscription(subData.data.subscription || null);
+      }
+
+      const invRes = await fetch('/api/v1/billing/invoices', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const invData = await invRes.json();
+      if (invData.success && Array.isArray(invData.data?.invoices)) {
+        const mappedInvoices: Invoice[] = invData.data.invoices.map((inv: any) => ({
+          id: inv.invoiceNumber || inv.id,
+          invoiceNumber: inv.invoiceNumber || inv.id,
+          date: inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString('vi-VN') : 'Mới đây',
+          dueDate: inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('vi-VN') : undefined,
+          paidAt: inv.paidAt,
+          description: inv.description,
+          amount: inv.amount,
+          currency: inv.currency || 'VND',
+          status: inv.status === 'PAID' ? 'paid' : inv.status === 'FAILED' ? 'failed' : 'pending',
+          pdfUrl: '#',
+        }));
+        if (mappedInvoices.length > 0) {
+          setInvoices(mappedInvoices);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch billing data:', err);
+    }
+  };
+
+  const refreshBilling = async () => {
+    if (authToken) {
+      await fetchBillingData(authToken);
+    }
+  };
+
+  const createCheckout = async (
+    planId: string,
+    billingInterval: 'MONTHLY' | 'YEARLY' = 'MONTHLY'
+  ): Promise<CheckoutResponse> => {
+    if (!authToken) throw new Error('Vui lòng đăng nhập để đăng ký gói dịch vụ');
+    const res = await fetch('/api/v1/billing/checkout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ planId, billingInterval }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Không thể tạo phiên thanh toán');
+    }
+    return data.data;
+  };
+
+  const simulatePayment = async (
+    checkoutId: string,
+    outcome: 'success' | 'failure' = 'success',
+    reason?: string
+  ) => {
+    if (!authToken) throw new Error('Vui lòng đăng nhập');
+    const res = await fetch('/api/v1/billing/checkout/simulate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ checkoutId, simulateOutcome: outcome, failureReason: reason }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Thao tác mô phỏng thất bại');
+    }
+    await refreshBilling();
+    return data.data;
+  };
+
+  const cancelSubscription = async () => {
+    if (!authToken) throw new Error('Vui lòng đăng nhập');
+    const res = await fetch('/api/v1/billing/subscription/cancel', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Không thể hủy gói đăng ký');
+    }
+    await refreshBilling();
+  };
+
+  const reactivateSubscription = async () => {
+    if (!authToken) throw new Error('Vui lòng đăng nhập');
+    const res = await fetch('/api/v1/billing/subscription/reactivate', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Không thể kích hoạt lại tự động gia hạn');
+    }
+    await refreshBilling();
+  };
+
   const refreshHosts = async () => {
     if (authToken) {
       await fetchBackendHosts(authToken);
@@ -282,6 +401,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             avatar: u.avatarUrl || prev.avatar,
           }));
           fetchBackendHosts(authToken);
+          fetchBillingData(authToken);
         } else {
           localStorage.removeItem('aston_auth_token');
           setAuthToken(null);
@@ -1128,6 +1248,12 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         logs,
         clearLogs,
         invoices,
+        userSubscription,
+        refreshBilling,
+        createCheckout,
+        simulatePayment,
+        cancelSubscription,
+        reactivateSubscription,
         userProfile,
         updateUserProfile,
         addBalance,

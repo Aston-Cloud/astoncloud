@@ -119,6 +119,53 @@ export interface MemoryHostBackup {
   updated_at: Date;
 }
 
+export interface MemorySubscription {
+  id: string;
+  user_id: string;
+  plan_id: string;
+  status: 'PENDING' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'EXPIRED' | 'SUSPENDED';
+  billing_interval: 'MONTHLY' | 'YEARLY';
+  price: number;
+  currency: string;
+  current_period_start: Date;
+  current_period_end: Date;
+  cancel_at_period_end: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface MemoryInvoice {
+  id: string;
+  user_id: string;
+  subscription_id?: string | null;
+  invoice_number: string;
+  amount: number;
+  currency: string;
+  status: 'DRAFT' | 'OPEN' | 'PAID' | 'VOID' | 'FAILED';
+  description: string;
+  invoice_date: Date | string;
+  due_date: Date | string;
+  paid_at?: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface MemoryPayment {
+  id: string;
+  user_id: string;
+  invoice_id: string;
+  subscription_id?: string | null;
+  provider: string;
+  provider_payment_id: string;
+  amount: number;
+  currency: string;
+  status: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'REFUNDED';
+  idempotency_key?: string | null;
+  metadata?: Record<string, any> | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface MemoryUser {
   id: string;
   email: string;
@@ -310,6 +357,40 @@ class MemoryStore {
   public hostEnvVariables: MemoryHostEnvVariable[] = [];
   public hostDomains: MemoryHostDomain[] = [];
   public hostBackups: MemoryHostBackup[] = [];
+  public subscriptions: MemorySubscription[] = [
+    {
+      id: 'sub-alex-001',
+      user_id: 'usr-alex-002',
+      plan_id: 'pro',
+      status: 'ACTIVE',
+      billing_interval: 'MONTHLY',
+      price: 259000,
+      currency: 'VND',
+      current_period_start: new Date('2026-01-01T00:00:00Z'),
+      current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      cancel_at_period_end: false,
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
+    },
+  ];
+  public invoices: MemoryInvoice[] = [
+    {
+      id: 'inv-alex-001',
+      user_id: 'usr-alex-002',
+      subscription_id: 'sub-alex-001',
+      invoice_number: 'INV-202601-0001',
+      amount: 259000,
+      currency: 'VND',
+      status: 'PAID',
+      description: 'Đăng ký gói Pro Cloud (Tháng 1/2026)',
+      invoice_date: new Date('2026-01-01T00:00:00Z'),
+      due_date: new Date('2026-01-08T00:00:00Z'),
+      paid_at: new Date('2026-01-01T00:05:00Z'),
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      updated_at: new Date('2026-01-01T00:00:00Z'),
+    },
+  ];
+  public payments: MemoryPayment[] = [];
 }
 
 export const memoryStore = new MemoryStore();
@@ -662,6 +743,25 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       oid: 0,
       fields: [],
       rows: (found ? [{ '?column?': 1 }] : []) as unknown as R[],
+    };
+  }
+
+  // 15a. SELECT COUNT(*) FROM hosts
+  if (q.includes('COUNT(*)') && q.includes('FROM hosts')) {
+    let filtered = [...memoryStore.hosts];
+    if (q.includes('WHERE user_id = $1') || q.includes('user_id = $1')) {
+      const userId = String(params[0]);
+      filtered = filtered.filter((h) => h.user_id === userId);
+    }
+    if (q.includes("status NOT IN ('DELETING')")) {
+      filtered = filtered.filter((h) => h.status !== 'DELETING');
+    }
+    return {
+      command: 'SELECT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [{ count: filtered.length }] as unknown as R[],
     };
   }
 
@@ -1505,6 +1605,401 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       oid: 0,
       fields: [],
       rows: (deletedItem ? [deletedItem] : []) as unknown as R[],
+    };
+  }
+
+
+  // ============================================================================
+  // BILLING, SUBSCRIPTIONS & PAYMENTS
+  // ============================================================================
+
+  // 32. SELECT FROM user_subscriptions
+  if (q.includes('FROM user_subscriptions')) {
+    let items = [...memoryStore.subscriptions];
+
+    if (q.includes('WHERE') && q.includes('user_id = $1')) {
+      const userId = String(params[0]);
+      items = items.filter((s) => s.user_id === userId);
+    } else if (q.includes('WHERE') && q.includes('id = $1')) {
+      const subId = String(params[0]);
+      items = items.filter((s) => s.id === subId);
+    }
+
+    if (q.includes("status = 'ACTIVE'")) {
+      items = items.filter((s) => s.status === 'ACTIVE');
+    }
+
+    // Sort
+    if (q.includes('ORDER BY s.created_at DESC') || q.includes('ORDER BY created_at DESC')) {
+      items.sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+    }
+
+    // LIMIT 1
+    if (q.includes('LIMIT 1') && items.length > 1) {
+      items = items.slice(0, 1);
+    }
+
+    // Enrich with joined plan data if requested
+    const enriched = items.map((sub) => {
+      const plan = memoryStore.plans.find((p) => p.id === sub.plan_id);
+      return {
+        ...sub,
+        plan_name: plan ? plan.name : sub.plan_id,
+        plan_price_monthly: plan ? plan.price_monthly : sub.price,
+        plan_cpu_cores: plan ? plan.cpu_cores : 1,
+        plan_ram_mb: plan ? plan.ram_mb : 512,
+        plan_disk_mb: plan ? plan.disk_mb : 5120,
+      };
+    });
+
+    return {
+      command: 'SELECT',
+      rowCount: enriched.length,
+      oid: 0,
+      fields: [],
+      rows: enriched as unknown as R[],
+    };
+  }
+
+  // 33. INSERT INTO user_subscriptions
+  if (q.startsWith('INSERT INTO user_subscriptions')) {
+    const userId = String(params[0]);
+    const planId = String(params[1]);
+    const status = (String(params[2] || 'ACTIVE')) as MemorySubscription['status'];
+    const interval = (String(params[3] || 'MONTHLY')) as MemorySubscription['billing_interval'];
+    const price = Number(params[4] || 0);
+    const currency = String(params[5] || 'VND');
+    const periodStart = params[6] ? new Date(String(params[6])) : new Date();
+    const periodEnd = params[7] ? new Date(String(params[7])) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const cancelAtEnd = Boolean(params[8]);
+
+    const newSub: MemorySubscription = {
+      id: crypto.randomUUID(),
+      user_id: userId,
+      plan_id: planId,
+      status,
+      billing_interval: interval,
+      price,
+      currency,
+      current_period_start: periodStart,
+      current_period_end: periodEnd,
+      cancel_at_period_end: cancelAtEnd,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.subscriptions.push(newSub);
+
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newSub] as unknown as R[],
+    };
+  }
+
+  // 34. UPDATE user_subscriptions
+  if (q.startsWith('UPDATE user_subscriptions')) {
+    let item: MemorySubscription | undefined;
+
+    // Pattern A1: UPDATE user_subscriptions SET plan_id = $1, billing_interval = $2, price = $3, status = $4, current_period_start = $5, current_period_end = $6, cancel_at_period_end = $7, updated_at = NOW() WHERE id = $8 RETURNING *
+    if (q.includes('SET plan_id = $1')) {
+      const planId = String(params[0]);
+      const interval = String(params[1]) as MemorySubscription['billing_interval'];
+      const price = Number(params[2]);
+      const status = String(params[3]) as MemorySubscription['status'];
+      const start = new Date(String(params[4]));
+      const end = new Date(String(params[5]));
+      const cancelAtEnd = Boolean(params[6]);
+      const subId = String(params[7]);
+
+      item = memoryStore.subscriptions.find((s) => s.id === subId);
+      if (item) {
+        item.plan_id = planId;
+        item.billing_interval = interval;
+        item.price = price;
+        item.status = status;
+        item.current_period_start = start;
+        item.current_period_end = end;
+        item.cancel_at_period_end = cancelAtEnd;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern A2: UPDATE user_subscriptions SET status = $1, current_period_start = $2, current_period_end = $3, cancel_at_period_end = $4, updated_at = NOW() WHERE id = $5 RETURNING *
+    else if (q.includes('SET status = $1, current_period_start = $2')) {
+      const status = String(params[0]) as MemorySubscription['status'];
+      const start = new Date(String(params[1]));
+      const end = new Date(String(params[2]));
+      const cancelAtEnd = Boolean(params[3]);
+      const subId = String(params[4]);
+
+      item = memoryStore.subscriptions.find((s) => s.id === subId);
+      if (item) {
+        item.status = status;
+        item.current_period_start = start;
+        item.current_period_end = end;
+        item.cancel_at_period_end = cancelAtEnd;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern B: UPDATE user_subscriptions SET cancel_at_period_end = $1, updated_at = NOW() WHERE id = $2 RETURNING *
+    else if (q.includes('SET cancel_at_period_end = $1')) {
+      const cancelAtEnd = Boolean(params[0]);
+      const subId = String(params[1]);
+
+      item = memoryStore.subscriptions.find((s) => s.id === subId);
+      if (item) {
+        item.cancel_at_period_end = cancelAtEnd;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern C: UPDATE user_subscriptions SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *
+    else if (q.includes('SET status = $1')) {
+      const status = String(params[0]) as MemorySubscription['status'];
+      const subId = String(params[1]);
+
+      item = memoryStore.subscriptions.find((s) => s.id === subId);
+      if (item) {
+        item.status = status;
+        item.updated_at = new Date();
+      }
+    }
+
+    return {
+      command: 'UPDATE',
+      rowCount: item ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (item ? [item] : []) as unknown as R[],
+    };
+  }
+
+  // 35. SELECT FROM billing_invoices
+  if (q.includes('FROM billing_invoices')) {
+    let items = [...memoryStore.invoices];
+
+    if (q.includes('WHERE') && (q.includes('user_id = $1') || q.includes('i.user_id = $1'))) {
+      const userId = String(params[0]);
+      items = items.filter((inv) => inv.user_id === userId);
+    } else if (q.includes('WHERE') && (q.includes('id = $1') || q.includes('i.id = $1'))) {
+      const invId = String(params[0]);
+      items = items.filter((inv) => inv.id === invId);
+    } else if (q.includes('WHERE') && (q.includes('invoice_number = $1') || q.includes('i.invoice_number = $1'))) {
+      const num = String(params[0]);
+      items = items.filter((inv) => inv.invoice_number === num);
+    }
+
+    if (q.includes('ORDER BY') && (q.includes('created_at DESC') || q.includes('i.created_at DESC'))) {
+      items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    }
+
+    if (q.includes('LIMIT 1') && items.length > 1) {
+      items = items.slice(0, 1);
+    }
+
+    return {
+      command: 'SELECT',
+      rowCount: items.length,
+      oid: 0,
+      fields: [],
+      rows: items as unknown as R[],
+    };
+  }
+
+  // 36. INSERT INTO billing_invoices
+  if (q.startsWith('INSERT INTO billing_invoices')) {
+    const id = params[0] !== undefined ? String(params[0]) : `inv-${Date.now()}`;
+    const userId = String(params[1]);
+    const subId = params[2] ? String(params[2]) : null;
+    const invNumber = String(params[3]);
+    const amount = Number(params[4]);
+    const currency = String(params[5] || 'VND');
+    const status = (String(params[6] || 'OPEN')) as MemoryInvoice['status'];
+    const desc = String(params[7] || '');
+    const invDate = params[8] ? new Date(String(params[8])) : new Date();
+    const dueDate = params[9] ? new Date(String(params[9])) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const paidAt = params[10] ? new Date(String(params[10])) : null;
+
+    const newInv: MemoryInvoice = {
+      id,
+      user_id: userId,
+      subscription_id: subId,
+      invoice_number: invNumber,
+      amount,
+      currency,
+      status,
+      description: desc,
+      invoice_date: invDate,
+      due_date: dueDate,
+      paid_at: paidAt,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.invoices.push(newInv);
+
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newInv] as unknown as R[],
+    };
+  }
+
+  // 37. UPDATE billing_invoices
+  if (q.startsWith('UPDATE billing_invoices')) {
+    let item: MemoryInvoice | undefined;
+
+    if (q.includes('SET subscription_id = $1 WHERE id = $2')) {
+      const subId = String(params[0]);
+      const invId = String(params[1]);
+      item = memoryStore.invoices.find((inv) => inv.id === invId);
+      if (item) {
+        item.subscription_id = subId;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern: UPDATE billing_invoices SET status = $1, paid_at = $2, updated_at = NOW() WHERE id = $3 RETURNING *
+    else if (q.includes('SET status = $1, paid_at = $2')) {
+      const status = String(params[0]) as MemoryInvoice['status'];
+      const paidAt = params[1] ? new Date(String(params[1])) : null;
+      const invId = String(params[2]);
+
+      item = memoryStore.invoices.find((inv) => inv.id === invId);
+      if (item) {
+        item.status = status;
+        item.paid_at = paidAt;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern: UPDATE billing_invoices SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *
+    else if (q.includes('SET status = $1')) {
+      const status = String(params[0]) as MemoryInvoice['status'];
+      const invId = String(params[1]);
+
+      item = memoryStore.invoices.find((inv) => inv.id === invId);
+      if (item) {
+        item.status = status;
+        item.updated_at = new Date();
+      }
+    }
+
+    return {
+      command: 'UPDATE',
+      rowCount: item ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (item ? [item] : []) as unknown as R[],
+    };
+  }
+
+  // 38. SELECT FROM billing_payments
+  if (q.includes('FROM billing_payments')) {
+    let items = [...memoryStore.payments];
+
+    if (q.includes('WHERE') && q.includes('provider_payment_id = $1')) {
+      const payId = String(params[0]);
+      items = items.filter((p) => p.provider_payment_id === payId);
+    } else if (q.includes('WHERE') && q.includes('id = $1')) {
+      const id = String(params[0]);
+      items = items.filter((p) => p.id === id);
+    } else if (q.includes('WHERE') && q.includes('invoice_id = $1')) {
+      const invId = String(params[0]);
+      items = items.filter((p) => p.invoice_id === invId);
+    }
+
+    if (q.includes('LIMIT 1') && items.length > 1) {
+      items = items.slice(0, 1);
+    }
+
+    return {
+      command: 'SELECT',
+      rowCount: items.length,
+      oid: 0,
+      fields: [],
+      rows: items as unknown as R[],
+    };
+  }
+
+  // 39. INSERT INTO billing_payments
+  if (q.startsWith('INSERT INTO billing_payments')) {
+    const id = params[0] !== undefined ? String(params[0]) : crypto.randomUUID();
+    const userId = String(params[1]);
+    const invId = String(params[2]);
+    const subId = params[3] ? String(params[3]) : null;
+    const provider = String(params[4] || 'mock');
+    const providerPayId = String(params[5]);
+    const amount = Number(params[6]);
+    const currency = String(params[7] || 'VND');
+    const status = (String(params[8] || 'PENDING')) as MemoryPayment['status'];
+    const idempotencyKey = params[9] ? String(params[9]) : null;
+    const metadata = params[10] ? (typeof params[10] === 'string' ? JSON.parse(params[10]) : params[10]) : null;
+
+    const newPayment: MemoryPayment = {
+      id,
+      user_id: userId,
+      invoice_id: invId,
+      subscription_id: subId,
+      provider,
+      provider_payment_id: providerPayId,
+      amount,
+      currency,
+      status,
+      idempotency_key: idempotencyKey,
+      metadata,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.payments.push(newPayment);
+
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newPayment] as unknown as R[],
+    };
+  }
+
+  // 40. UPDATE billing_payments
+  if (q.startsWith('UPDATE billing_payments')) {
+    let item: MemoryPayment | undefined;
+
+    if (q.includes('SET subscription_id = $1 WHERE id = $2')) {
+      const subId = String(params[0]);
+      const id = String(params[1]);
+      item = memoryStore.payments.find((p) => p.id === id);
+      if (item) {
+        item.subscription_id = subId;
+        item.updated_at = new Date();
+      }
+    } else if (q.includes('WHERE provider_payment_id = $2')) {
+      const status = String(params[0]) as MemoryPayment['status'];
+      const providerPayId = String(params[1]);
+      item = memoryStore.payments.find((p) => p.provider_payment_id === providerPayId);
+      if (item) {
+        item.status = status;
+        item.updated_at = new Date();
+      }
+    } else if (q.includes('SET status = $1 WHERE id = $2')) {
+      const status = String(params[0]) as MemoryPayment['status'];
+      const id = String(params[1]);
+      item = memoryStore.payments.find((p) => p.id === id);
+      if (item) {
+        item.status = status;
+        item.updated_at = new Date();
+      }
+    }
+
+    return {
+      command: 'UPDATE',
+      rowCount: item ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (item ? [item] : []) as unknown as R[],
     };
   }
 
