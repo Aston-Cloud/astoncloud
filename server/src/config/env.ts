@@ -54,6 +54,12 @@ const envSchema = z.object({
   MAX_DOMAINS_PER_HOST: z.coerce.number().int().positive().default(5),
   DOMAIN_VERIFICATION_MODE: z.enum(['mock', 'dns']).default('mock'),
   SSL_MODE: z.enum(['mock', 'acme']).default('mock'),
+
+  // Backups & Restore Management (Milestone 11)
+  MAX_BACKUPS_PER_HOST: z.coerce.number().int().positive().default(5),
+  MAX_BACKUP_SIZE_MB: z.coerce.number().int().positive().default(100),
+  BACKUP_STORAGE_DIR: z.string().default('mock-backups'),
+  BACKUP_SERVICE_MODE: z.enum(['mock', 'remote']).default('mock'),
 });
 
 const parsed = envSchema.safeParse(process.env);

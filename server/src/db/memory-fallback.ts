@@ -102,6 +102,23 @@ export interface MemoryHostDomain {
   updated_at: Date;
 }
 
+export interface MemoryHostBackup {
+  id: string;
+  host_id: string;
+  user_id: string;
+  name: string;
+  status: 'PENDING' | 'CREATING' | 'COMPLETED' | 'FAILED' | 'RESTORING' | 'RESTORED' | 'DELETING' | 'DELETED';
+  size_bytes: number;
+  storage_key: string;
+  backup_type: 'manual' | 'automatic';
+  error_message?: string | null;
+  metadata?: Record<string, any>;
+  completed_at?: Date | null;
+  expires_at?: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface MemoryUser {
   id: string;
   email: string;
@@ -292,6 +309,7 @@ class MemoryStore {
   public hosts: MemoryHost[] = [];
   public hostEnvVariables: MemoryHostEnvVariable[] = [];
   public hostDomains: MemoryHostDomain[] = [];
+  public hostBackups: MemoryHostBackup[] = [];
 }
 
 export const memoryStore = new MemoryStore();
@@ -835,6 +853,8 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
     memoryStore.hostEnvVariables = memoryStore.hostEnvVariables.filter((v) => v.host_id !== hostId);
     // Cascade delete related host domains
     memoryStore.hostDomains = memoryStore.hostDomains.filter((d) => d.host_id !== hostId);
+    // Cascade delete related host backups
+    memoryStore.hostBackups = memoryStore.hostBackups.filter((b) => b.host_id !== hostId);
     const deleted = prevLen > memoryStore.hosts.length;
     return {
       command: 'DELETE',
@@ -1261,6 +1281,220 @@ export function executeMemoryQuery<R extends pg.QueryResultRow = pg.QueryResultR
       rows: (deletedItem ? [deletedItem] : []) as unknown as R[],
     };
   }
+
+  // ==========================================
+  // HOST BACKUPS & RESTORE (MILESTONE 11)
+  // ==========================================
+
+  // 28. SELECT FROM host_backups
+  if (q.startsWith('SELECT') && q.includes('FROM host_backups')) {
+    // 28a. COUNT(*) query
+    if (q.includes('COUNT(*)')) {
+      const hostId = String(params[0]);
+      const activeBackups = memoryStore.hostBackups.filter(
+        (b) => b.host_id === hostId && b.status !== 'DELETED'
+      );
+      return {
+        command: 'SELECT',
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+        rows: [{ count: activeBackups.length }] as unknown as R[],
+      };
+    }
+
+    // 28b. SELECT * FROM host_backups WHERE id = $1 AND host_id = $2
+    if (q.includes('WHERE id = $1 AND host_id = $2')) {
+      const backupId = String(params[0]);
+      const hostId = String(params[1]);
+      const item = memoryStore.hostBackups.find(
+        (b) => b.id === backupId && b.host_id === hostId
+      );
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 28c. SELECT * FROM host_backups WHERE id = $1
+    if (q.includes('WHERE id = $1')) {
+      const backupId = String(params[0]);
+      const item = memoryStore.hostBackups.find((b) => b.id === backupId);
+      return {
+        command: 'SELECT',
+        rowCount: item ? 1 : 0,
+        oid: 0,
+        fields: [],
+        rows: (item ? [item] : []) as unknown as R[],
+      };
+    }
+
+    // 28d. SELECT * FROM host_backups WHERE host_id = $1
+    if (q.includes('WHERE host_id = $1')) {
+      const hostId = String(params[0]);
+      let items = memoryStore.hostBackups.filter((b) => b.host_id === hostId);
+      if (q.includes("status != 'DELETED'")) {
+        items = items.filter((b) => b.status !== 'DELETED');
+      }
+      items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return {
+        command: 'SELECT',
+        rowCount: items.length,
+        oid: 0,
+        fields: [],
+        rows: items as unknown as R[],
+      };
+    }
+
+    // 28e. SELECT * FROM host_backups WHERE user_id = $1
+    if (q.includes('WHERE user_id = $1')) {
+      const userId = String(params[0]);
+      let items = memoryStore.hostBackups.filter((b) => b.user_id === userId);
+      if (q.includes("status != 'DELETED'")) {
+        items = items.filter((b) => b.status !== 'DELETED');
+      }
+      items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return {
+        command: 'SELECT',
+        rowCount: items.length,
+        oid: 0,
+        fields: [],
+        rows: items as unknown as R[],
+      };
+    }
+
+    // Fallback select all backups
+    const items = [...memoryStore.hostBackups].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    return {
+      command: 'SELECT',
+      rowCount: items.length,
+      oid: 0,
+      fields: [],
+      rows: items as unknown as R[],
+    };
+  }
+
+  // 29. INSERT INTO host_backups
+  if (q.startsWith('INSERT INTO host_backups')) {
+    const hostId = String(params[0]);
+    const userId = String(params[1]);
+    const name = String(params[2]);
+    const status = (String(params[3] || 'CREATING')) as MemoryHostBackup['status'];
+    const backupType = (String(params[4] || 'manual')) as MemoryHostBackup['backup_type'];
+    const metadata = (typeof params[5] === 'string' ? JSON.parse(params[5]) : (params[5] || {})) as Record<string, any>;
+    const storageKey = params[6] !== undefined ? String(params[6]) : '';
+    const sizeBytes = params[7] !== undefined ? Number(params[7]) : 0;
+
+    const newBackup: MemoryHostBackup = {
+      id: crypto.randomUUID(),
+      host_id: hostId,
+      user_id: userId,
+      name,
+      status,
+      size_bytes: sizeBytes,
+      storage_key: storageKey,
+      backup_type: backupType,
+      metadata,
+      error_message: null,
+      completed_at: status === 'COMPLETED' ? new Date() : null,
+      expires_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    memoryStore.hostBackups.push(newBackup);
+
+    return {
+      command: 'INSERT',
+      rowCount: 1,
+      oid: 0,
+      fields: [],
+      rows: [newBackup] as unknown as R[],
+    };
+  }
+
+  // 30. UPDATE host_backups
+  if (q.startsWith('UPDATE host_backups')) {
+    let item: MemoryHostBackup | undefined;
+
+    // Pattern A: UPDATE host_backups SET status = $1, size_bytes = $2, storage_key = $3, completed_at = NOW(), expires_at = $4, updated_at = NOW() WHERE id = $5 RETURNING *
+    if (q.includes('SET status = $1, size_bytes = $2')) {
+      const status = String(params[0]) as MemoryHostBackup['status'];
+      const sizeBytes = Number(params[1]);
+      const storageKey = String(params[2]);
+      const expiresAt = params[3] ? new Date(String(params[3])) : null;
+      const backupId = String(params[4]);
+
+      item = memoryStore.hostBackups.find((b) => b.id === backupId);
+      if (item) {
+        item.status = status;
+        item.size_bytes = sizeBytes;
+        item.storage_key = storageKey;
+        item.completed_at = new Date();
+        item.expires_at = expiresAt;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern B: UPDATE host_backups SET status = $1, error_message = $2, updated_at = NOW() WHERE id = $3 RETURNING *
+    else if (q.includes('SET status = $1, error_message = $2')) {
+      const status = String(params[0]) as MemoryHostBackup['status'];
+      const errorMsg = params[1] !== undefined && params[1] !== null ? String(params[1]) : null;
+      const backupId = String(params[2]);
+
+      item = memoryStore.hostBackups.find((b) => b.id === backupId);
+      if (item) {
+        item.status = status;
+        item.error_message = errorMsg;
+        item.updated_at = new Date();
+      }
+    }
+    // Pattern C: Generic UPDATE host_backups SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *
+    else if (q.includes('SET status = $1')) {
+      const status = String(params[0]) as MemoryHostBackup['status'];
+      const backupId = String(params[1]);
+
+      item = memoryStore.hostBackups.find((b) => b.id === backupId);
+      if (item) {
+        item.status = status;
+        item.updated_at = new Date();
+      }
+    }
+
+    return {
+      command: 'UPDATE',
+      rowCount: item ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (item ? [item] : []) as unknown as R[],
+    };
+  }
+
+  // 31. DELETE FROM host_backups
+  if (q.startsWith('DELETE FROM host_backups')) {
+    const backupId = String(params[0]);
+    const hostId = params[1] !== undefined ? String(params[1]) : undefined;
+    const prevLen = memoryStore.hostBackups.length;
+    const deletedItem = memoryStore.hostBackups.find(
+      (b) => b.id === backupId && (!hostId || b.host_id === hostId)
+    );
+    memoryStore.hostBackups = memoryStore.hostBackups.filter(
+      (b) => !(b.id === backupId && (!hostId || b.host_id === hostId))
+    );
+    const deleted = prevLen > memoryStore.hostBackups.length;
+    return {
+      command: 'DELETE',
+      rowCount: deleted ? 1 : 0,
+      oid: 0,
+      fields: [],
+      rows: (deletedItem ? [deletedItem] : []) as unknown as R[],
+    };
+  }
+
 
   // Default fallback for SELECT 1 health
   if (q.includes('SELECT 1 AS health') || q.includes('SELECT 1')) {

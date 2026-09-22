@@ -119,16 +119,38 @@ export interface HostDomain {
 
 export type DomainRecord = HostDomain;
 
-export interface BackupItem {
+export interface HostBackup {
   id: string;
   name: string;
   hostId: string;
-  hostName: string;
-  size: string;
+  hostName?: string;
+  userId?: string;
+  size?: string;
+  sizeBytes?: number;
+  sizeFormatted?: string;
+  status:
+    | 'PENDING'
+    | 'CREATING'
+    | 'COMPLETED'
+    | 'FAILED'
+    | 'RESTORING'
+    | 'RESTORED'
+    | 'DELETING'
+    | 'DELETED'
+    | 'ready'
+    | 'creating'
+    | 'restoring'
+    | 'failed';
+  backupType?: 'manual' | 'automatic';
+  isAutomatic?: boolean;
+  errorMessage?: string | null;
+  metadata?: Record<string, any>;
   createdAt: string;
-  status: 'ready' | 'creating' | 'restoring' | 'failed';
-  isAutomatic: boolean;
+  completedAt?: string | null;
+  expiresAt?: string | null;
 }
+
+export type BackupItem = HostBackup;
 
 export interface LogEntry {
   id: string;

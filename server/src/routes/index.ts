@@ -7,6 +7,7 @@ import { runtimesRouter } from '../modules/runtimes/runtimes.routes.js';
 import { nodesRouter } from '../modules/nodes/nodes.routes.js';
 import { hostsRouter } from '../modules/hosts/hosts.routes.js';
 import { domainsRouter } from '../modules/domains/domains.routes.js';
+import { backupsRouter } from '../modules/backups/backups.routes.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendSuccess } from '../utils/response.js';
 
@@ -35,6 +36,9 @@ apiRouter.use('/hosts', hostsRouter);
 
 // 8. Custom Domains: /api/v1/domains
 apiRouter.use('/domains', domainsRouter);
+
+// 9. Host Backups: /api/v1/backups
+apiRouter.use('/backups', backupsRouter);
 
 // 9. Admin preview endpoint (for Admin Authorization & Isolation verification)
 apiRouter.get('/admin/stats', requireAuth, requireRole('ADMIN'), (_req, res) => {

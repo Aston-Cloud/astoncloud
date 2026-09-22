@@ -20,6 +20,8 @@ import {
 } from './hosts.schema.js';
 import { DomainsController } from '../domains/domains.controller.js';
 import { createDomainSchema, domainParamsSchema } from '../domains/domains.schema.js';
+import { BackupsController } from '../backups/backups.controller.js';
+import { createBackupSchema, backupParamsSchema } from '../backups/backups.schema.js';
 
 export const hostsRouter = Router();
 
@@ -156,6 +158,41 @@ hostsRouter.delete(
   '/:id/domains/:domainId',
   validate({ params: domainParamsSchema }),
   DomainsController.deleteHostDomain
+);
+
+// ==========================================
+// HOST BACKUPS & RESTORE ROUTES (MILESTONE 11)
+// ==========================================
+
+// GET /api/v1/hosts/:id/backups - List host backups
+hostsRouter.get('/:id/backups', BackupsController.listHostBackups);
+
+// POST /api/v1/hosts/:id/backups - Create a backup snapshot
+hostsRouter.post(
+  '/:id/backups',
+  validate({ body: createBackupSchema }),
+  BackupsController.createHostBackup
+);
+
+// GET /api/v1/hosts/:id/backups/:backupId - Get backup detail
+hostsRouter.get(
+  '/:id/backups/:backupId',
+  validate({ params: backupParamsSchema }),
+  BackupsController.getHostBackup
+);
+
+// POST /api/v1/hosts/:id/backups/:backupId/restore - Restore host from backup
+hostsRouter.post(
+  '/:id/backups/:backupId/restore',
+  validate({ params: backupParamsSchema }),
+  BackupsController.restoreHostBackup
+);
+
+// DELETE /api/v1/hosts/:id/backups/:backupId - Delete host backup
+hostsRouter.delete(
+  '/:id/backups/:backupId',
+  validate({ params: backupParamsSchema }),
+  BackupsController.deleteHostBackup
 );
 
 
